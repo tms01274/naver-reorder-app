@@ -46,9 +46,10 @@ set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "TARGET=%~dp0windows-autostart\start-server.bat"
 powershell -NoProfile -Command "$s=(New-Object -COM WScript.Shell).CreateShortcut('%STARTUP%\NaverReorderApp.lnk'); $s.TargetPath='%TARGET%'; $s.WorkingDirectory='%~dp0'; $s.WindowStyle=7; $s.Save()" >nul
 
-REM ── 5. 바탕화면에 여는 아이콘 만들기 ───────────────────
+REM ── 5. 바탕화면에 여는 아이콘 / 업데이트 아이콘 만들기 ──
 set "DESKTOP=%USERPROFILE%\Desktop"
 copy "재고 발주 도우미 열기.url" "%DESKTOP%\재고 발주 도우미 열기.url" >nul 2>nul
+powershell -NoProfile -Command "$s=(New-Object -COM WScript.Shell).CreateShortcut('%DESKTOP%\재고 발주 도우미 업데이트.lnk'); $s.TargetPath='%~dp0업데이트.bat'; $s.WorkingDirectory='%~dp0'; $s.Save()" >nul
 
 REM ── 6. 지금 바로 실행하고 브라우저 열기 ────────────────
 echo.
@@ -64,6 +65,7 @@ echo =========================================
 echo 이제부터는 컴퓨터를 켤 때마다 자동으로 실행돼요.
 echo (로그인할 때 검은 창이 잠깐 보였다가 작업표시줄로 최소화돼요 - 정상입니다)
 echo 바탕화면에 생긴 "재고 발주 도우미 열기" 아이콘을 더블클릭하면 언제든 화면을 볼 수 있어요.
+echo 나중에 업데이트하라는 연락을 받으면 "재고 발주 도우미 업데이트" 아이콘을 더블클릭하세요.
 echo.
 echo 이 검은 창은 이제 닫으셔도 됩니다.
 pause
