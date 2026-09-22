@@ -208,6 +208,7 @@ h1, h2 { font-family: "Iowan Old Style", "Noto Serif KR", Georgia, serif; margin
   display: flex; align-items: center; justify-content: center;
   padding: 20px;
 }
+.overlay[hidden] { display: none; }
 .detail-card {
   background: #fff;
   border-radius: 12px;
