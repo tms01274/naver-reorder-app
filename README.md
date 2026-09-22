@@ -12,6 +12,22 @@ Node.js가 없으면 설치 페이지를 열어주고, 있으면 자동으로 �
 
 나중에 `.env` 파일 등 설정을 바꾼 뒤에는 `다시-시작하기.bat`을 더블클릭하면 바뀐 내용이 반영됩니다.
 
+### 새 버전으로 업데이트하기
+
+코드가 업데이트되면 `업데이트.bat`을 더블클릭하세요. 최신 코드를 받아오고, 필요한 부품을
+설치하고, 자동으로 재시작까지 합니다. `.env` 설정과 `data` 폴더(공급업체 정보, 로그)는
+전혀 건드리지 않으니 안심하고 눌러도 됩니다.
+
+이 프로그램은 GitHub 비공개 저장소(`https://github.com/tms01274/naver-reorder-app`)로
+관리됩니다. 다른 PC/지점에 처음 설치할 때는 아래 순서로 진행하세요.
+
+1. Git 설치: `winget install --id Git.Git -e`
+2. GitHub CLI 설치: `winget install --id GitHub.cli -e`
+3. 로그인: `gh auth login --hostname github.com --git-protocol https --web`
+   (안내에 따라 브라우저에서 GitHub 계정으로 로그인/승인)
+4. 코드 받기: `git clone https://github.com/tms01274/naver-reorder-app.git`
+5. 받은 폴더 안에서 `설치하기.bat` 더블클릭 → 이후로는 `업데이트.bat`으로 계속 최신화
+
 아래는 터미널로 직접 하고 싶을 때(개발/Mac 등)를 위한 수동 설치 방법입니다.
 
 ## 1. 처음 실행하기 (샘플 데이터로 바로 체험)
