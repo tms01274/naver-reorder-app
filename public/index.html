@@ -55,6 +55,10 @@
           <option value="all">전체</option>
         </select>
       </div>
+      <div id="listLoadingOverlay" class="list-loading-overlay" hidden>
+        <div class="spinner"></div>
+        <span>네이버에서 최신 데이터를 불러오는 중…</span>
+      </div>
       <div id="reorderList" class="reorder-list">불러오는 중…</div>
 
       <details class="all-products">
@@ -72,7 +76,7 @@
   </div>
 
   <div id="labelOverlay" class="overlay" hidden>
-    <div class="detail-card">
+    <div class="detail-card label-manager-card">
       <button id="closeLabelManager" class="btn-close" aria-label="닫기">×</button>
       <div id="labelManagerBody"></div>
     </div>

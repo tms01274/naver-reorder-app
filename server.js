@@ -20,6 +20,29 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+// 네이버 API(상품/주문)는 호출당 시간이 꽤 걸리므로, 짧게 캐시해서
+// 라벨 저장/삭제처럼 화면을 다시 그릴 때마다 매번 다시 부르지 않게 합니다.
+const CACHE_TTL_MS = 3 * 60 * 1000;
+let productsCache = { data: null, expiresAt: 0 };
+const ordersCacheByDays = new Map(); // lookbackDays -> { data, expiresAt }
+
+async function getCachedProducts() {
+  const now = Date.now();
+  if (productsCache.data && productsCache.expiresAt > now) return productsCache.data;
+  const data = await naverClient.fetchProducts();
+  productsCache = { data, expiresAt: now + CACHE_TTL_MS };
+  return data;
+}
+
+async function getCachedOrders(days) {
+  const now = Date.now();
+  const cached = ordersCacheByDays.get(days);
+  if (cached && cached.expiresAt > now) return cached.data;
+  const data = await naverClient.fetchRecentOrders(days);
+  ordersCacheByDays.set(days, { data, expiresAt: now + CACHE_TTL_MS });
+  return data;
+}
+
 function getSettings(overrides = {}) {
   const saved = readSettings();
 
@@ -42,8 +65,8 @@ app.get("/api/products", async (req, res) => {
   try {
     const settings = getSettings(req.query);
     const [products, orders, suppliers] = await Promise.all([
-      naverClient.fetchProducts(),
-      naverClient.fetchRecentOrders(settings.lookbackDays),
+      getCachedProducts(),
+      getCachedOrders(settings.lookbackDays),
       Promise.resolve(getAllSuppliers()),
     ]);
     const labels = getAllLabels();

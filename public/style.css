@@ -168,16 +168,38 @@ h1, h2 { font-family: "Iowan Old Style", "Noto Serif KR", Georgia, serif; margin
 }
 .label-edit-row {
   align-items: flex-end;
-  gap: 16px;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--paper);
+  border-radius: 8px;
+  padding: 12px 14px;
+  border-bottom: none;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.label-edit-row:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(31, 42, 36, 0.08);
 }
 .label-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: var(--amber-bg);
   color: var(--amber);
+  border: 1px solid transparent;
   border-radius: 999px;
-  padding: 1px 9px;
+  padding: 2px 10px 2px 8px;
   font-size: 0.76rem;
+  font-weight: 600;
   margin-left: 8px;
+  vertical-align: middle;
+}
+.label-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .count-badge {
   background: var(--danger-bg);
@@ -197,12 +219,18 @@ h1, h2 { font-family: "Iowan Old Style", "Noto Serif KR", Georgia, serif; margin
   gap: 16px;
   padding: 14px 16px;
   border: 1px solid var(--line);
+  border-left: 4px solid transparent;
   border-radius: 8px;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
 }
-.product-row:hover { border-color: var(--moss); }
-.product-row.urgent { border-color: var(--danger-ink); background: var(--danger-bg); }
+.product-row:hover {
+  border-color: var(--moss);
+  box-shadow: 0 4px 14px rgba(31, 42, 36, 0.08);
+  transform: translateY(-1px);
+}
+.product-row:not(.urgent):not([style*="border-left-color"]):hover { border-left-color: var(--moss); }
+.product-row.urgent { border-color: var(--danger-ink); border-left-color: var(--danger-ink); background: var(--danger-bg); }
 
 .product-name { font-weight: 600; }
 .product-meta { font-size: 0.82rem; color: var(--muted); margin-top: 2px; }
@@ -269,6 +297,39 @@ h1, h2 { font-family: "Iowan Old Style", "Noto Serif KR", Georgia, serif; margin
 
 .empty-note { color: var(--muted); padding: 20px 4px; }
 
+.list-panel { position: relative; }
+.list-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: rgba(246, 245, 240, 0.85);
+  backdrop-filter: blur(1px);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  animation: fade-in 0.15s ease-out;
+}
+.list-loading-overlay[hidden] { display: none; }
+.list-loading-overlay span { color: var(--muted); font-size: 0.85rem; }
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--line);
+  border-top-color: var(--moss);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.btn-secondary:disabled, .btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .overlay {
   position: fixed; inset: 0;
   background: rgba(31, 42, 36, 0.45);
@@ -292,6 +353,16 @@ h1, h2 { font-family: "Iowan Old Style", "Noto Serif KR", Georgia, serif; margin
   cursor: pointer; color: var(--muted); line-height: 1;
 }
 .detail-card h3 { margin: 0 0 4px; font-size: 1.25rem; }
+.label-manager-card { max-width: 780px; }
+.label-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+@media (max-width: 640px) {
+  .label-grid { grid-template-columns: 1fr; }
+}
 .detail-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;

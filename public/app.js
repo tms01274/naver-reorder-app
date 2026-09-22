@@ -39,12 +39,21 @@ function fillTemplate(template, values) {
   });
 }
 
+function setListLoading(isLoading) {
+  document.getElementById("listLoadingOverlay").hidden = !isLoading;
+}
+
 async function loadProducts(params = {}) {
-  const qs = new URLSearchParams(params).toString();
-  const res = await fetch(`/api/products${qs ? "?" + qs : ""}`);
-  const data = await res.json();
-  currentData = data;
-  render(data);
+  setListLoading(true);
+  try {
+    const qs = new URLSearchParams(params).toString();
+    const res = await fetch(`/api/products${qs ? "?" + qs : ""}`);
+    const data = await res.json();
+    currentData = data;
+    render(data);
+  } finally {
+    setListLoading(false);
+  }
 }
 
 function render(data) {
@@ -102,10 +111,15 @@ function getUnlabeledProducts() {
 
 function rowHtml(p) {
   const daysLeftText = p.daysLeft === null ? "판매 이력 없음" : `약 ${p.daysLeft}일분 남음`;
+  const color = p.label?.color;
+  const rowStyle = color && !p.needsReorder ? `style="border-left-color:${color};"` : "";
+  const chip = p.label
+    ? `<span class="label-chip" style="background:${color}1a; color:${color}; border-color:${color}4d;"><span class="label-dot" style="background:${color};"></span>${escapeHtml(p.label.name)}</span>`
+    : "";
   return `
-    <div class="product-row ${p.needsReorder ? "urgent" : ""}" data-id="${p.id}">
+    <div class="product-row ${p.needsReorder ? "urgent" : ""}" data-id="${p.id}" ${rowStyle}>
       <div>
-        <div class="product-name">${escapeHtml(p.name)}${p.label ? `<span class="label-chip">${escapeHtml(p.label.name)}</span>` : ""}</div>
+        <div class="product-name">${escapeHtml(p.name)}${chip}</div>
         <div class="product-meta">현재 재고 ${p.stockQuantity}개 · 일평균 판매 ${p.dailyVelocity}개</div>
       </div>
       <div class="days-left ${p.needsReorder ? "" : "safe"}">${daysLeftText}</div>
@@ -205,8 +219,17 @@ function currentSettingsParams() {
   };
 }
 
-document.getElementById("applySettings").addEventListener("click", () => {
-  loadProducts(currentSettingsParams());
+document.getElementById("applySettings").addEventListener("click", async () => {
+  const btn = document.getElementById("applySettings");
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "적용 중…";
+  try {
+    await loadProducts(currentSettingsParams());
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
 });
 
 document.getElementById("closeDetail").addEventListener("click", () => {
@@ -238,13 +261,14 @@ function renderLabelManagerBody() {
     </div>
 
     <h4>현재 라벨</h4>
+    <div class="label-grid">
     ${currentLabels.length
       ? currentLabels
           .map(
             (l) => `
-        <div class="unlabeled-row label-edit-row" data-label-id="${l.id}">
+        <div class="unlabeled-row label-edit-row" data-label-id="${l.id}" style="border-left:4px solid ${l.color};">
           <label>라벨명
-            <input class="label-edit-name" type="text" value="${escapeAttr(l.name)}" style="width:100px;" />
+            <input class="label-edit-name" type="text" value="${escapeAttr(l.name)}" style="width:120px;" />
           </label>
           <label>리드타임(일)
             <input class="label-edit-leadtime" type="number" min="0" value="${l.leadTimeDays}" style="width:70px;" />
@@ -257,6 +281,7 @@ function renderLabelManagerBody() {
           )
           .join("")
       : `<div class="product-meta" style="margin-bottom:16px;">아직 만든 라벨이 없어요. 위에서 먼저 만들어주세요.</div>`}
+    </div>
 
     <h4>입고유형 라벨이 없는 품목 (${unlabeled.length}개)</h4>
     ${unlabeled.length

@@ -25,6 +25,10 @@ const API_ENDPOINTS = {
 
 let cachedToken = null; // { accessToken, expiresAt }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * 커머스API 인증 토큰 발급용 서명값 생성
  * 공식 규격: password = `${client_id}_${timestamp}`
@@ -147,26 +151,53 @@ async function fetchProducts() {
 /**
  * 최근 N일간 상품주문 내역 조회 (판매속도 계산용)
  * 반환: [{ productId, quantity, orderedAt }]
+ *
+ * 네이버 커머스API는 from~to 기간을 최대 24시간까지만 허용하므로,
+ * 요청 기간을 23시간 단위로 나눠 여러 번 호출한 뒤 결과를 합칩니다.
  */
 async function fetchRecentOrders(days) {
   const to = new Date();
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+  const CHUNK_MS = 23 * 60 * 60 * 1000;
 
-  const params = new URLSearchParams({
-    from: from.toISOString(),
-    to: to.toISOString(),
-  });
+  const orders = [];
+  let chunkFrom = from;
+  while (chunkFrom < to) {
+    const chunkTo = new Date(Math.min(chunkFrom.getTime() + CHUNK_MS, to.getTime()));
 
-  const data = await authedFetch(`${API_ENDPOINTS.productOrders}?${params.toString()}`, {
-    method: "GET",
-  });
+    let page = 1;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const params = new URLSearchParams({
+        from: chunkFrom.toISOString(),
+        to: chunkTo.toISOString(),
+        page: String(page),
+      });
 
-  const orders = data?.data ?? data?.contents ?? [];
-  return orders.map((o) => ({
-    productId: String(o.productOrder?.productId ?? o.productId ?? ""),
-    quantity: Number(o.productOrder?.quantity ?? o.quantity ?? 0),
-    orderedAt: o.productOrder?.orderDate ?? o.orderDate ?? null,
-  }));
+      const data = await authedFetch(`${API_ENDPOINTS.productOrders}?${params.toString()}`, {
+        method: "GET",
+      });
+
+      const pageOrders = data?.data?.contents ?? data?.contents ?? [];
+      for (const o of pageOrders) {
+        orders.push({
+          productId: String(o.productOrder?.productId ?? o.productId ?? ""),
+          quantity: Number(o.productOrder?.quantity ?? o.quantity ?? 0),
+          orderedAt: o.productOrder?.orderDate ?? o.orderDate ?? null,
+        });
+      }
+
+      const hasNext = data?.data?.pagination?.hasNext ?? false;
+      if (!hasNext) break;
+      page += 1;
+      await sleep(350);
+    }
+
+    chunkFrom = chunkTo;
+    if (chunkFrom < to) await sleep(350);
+  }
+
+  return orders;
 }
 
 module.exports = { fetchProducts, fetchRecentOrders, getAccessToken };
