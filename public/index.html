@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>재고 발주 도우미</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>재고 발주 도우미</h1>
+      <div class="mock-badge" id="mockBadge" hidden>샘플 데이터 모드</div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel settings-panel">
+      <h2>판단 기준</h2>
+      <label>
+        판매 속도 계산 기간
+        <div class="input-row"><input type="number" id="lookbackDays" min="1" /> <span>일</span></div>
+      </label>
+      <label>
+        기본 리드타임 (발주→입고)
+        <div class="input-row"><input type="number" id="leadTimeDays" min="0" /> <span>일</span></div>
+      </label>
+      <label>
+        안전 여유일수
+        <div class="input-row"><input type="number" id="bufferDays" min="0" /> <span>일</span></div>
+      </label>
+      <button id="applySettings" class="btn-secondary">적용</button>
+
+      <details class="mail-template-panel">
+        <summary>발주 메일 양식 관리</summary>
+        <label>제목
+          <input id="mtSubject" type="text" />
+        </label>
+        <label>본문
+          <textarea id="mtBody" rows="8"></textarea>
+        </label>
+        <div class="placeholder-hint" id="placeholderHint"></div>
+        <div class="form-actions">
+          <button id="saveTemplate" class="btn-secondary" style="width:auto;">양식 저장</button>
+          <span id="templateSavedNote" class="saved-note" hidden>저장됨</span>
+        </div>
+      </details>
+    </section>
+
+    <section class="panel list-panel">
+      <div class="list-header">
+        <h2>지금 발주가 필요한 품목</h2>
+        <span id="reorderCount" class="count-badge">–</span>
+      </div>
+      <div id="reorderList" class="reorder-list">불러오는 중…</div>
+
+      <details class="all-products">
+        <summary>전체 품목 보기</summary>
+        <div id="allList" class="reorder-list"></div>
+      </details>
+    </section>
+  </main>
+
+  <div id="detailOverlay" class="overlay" hidden>
+    <div class="detail-card">
+      <button id="closeDetail" class="btn-close" aria-label="닫기">×</button>
+      <div id="detailBody"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
