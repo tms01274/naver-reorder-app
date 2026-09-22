@@ -22,14 +22,14 @@
         <div class="input-row"><input type="number" id="lookbackDays" min="1" /> <span>일</span></div>
       </label>
       <label>
-        기본 리드타임 (발주→입고)
-        <div class="input-row"><input type="number" id="leadTimeDays" min="0" /> <span>일</span></div>
-      </label>
-      <label>
         안전 여유일수
         <div class="input-row"><input type="number" id="bufferDays" min="0" /> <span>일</span></div>
       </label>
       <button id="applySettings" class="btn-secondary">적용</button>
+
+      <button id="openLabelManager" class="btn-secondary label-manager-btn">
+        입고유형 라벨 관리 <span id="labelCountBadge" class="count-badge" hidden></span>
+      </button>
 
       <details class="mail-template-panel">
         <summary>발주 메일 양식 관리</summary>
@@ -51,6 +51,9 @@
       <div class="list-header">
         <h2>지금 발주가 필요한 품목</h2>
         <span id="reorderCount" class="count-badge">–</span>
+        <select id="labelFilter" class="label-filter">
+          <option value="all">전체</option>
+        </select>
       </div>
       <div id="reorderList" class="reorder-list">불러오는 중…</div>
 
@@ -65,6 +68,13 @@
     <div class="detail-card">
       <button id="closeDetail" class="btn-close" aria-label="닫기">×</button>
       <div id="detailBody"></div>
+    </div>
+  </div>
+
+  <div id="labelOverlay" class="overlay" hidden>
+    <div class="detail-card">
+      <button id="closeLabelManager" class="btn-close" aria-label="닫기">×</button>
+      <div id="labelManagerBody"></div>
     </div>
   </div>
 

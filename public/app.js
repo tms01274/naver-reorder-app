@@ -1,5 +1,7 @@
 let currentData = null;
 let currentTemplate = null;
+let currentLabels = [];
+let hasAutoOpenedLabelPopup = false;
 
 async function loadMailTemplate() {
   const res = await fetch("/api/mail-template");
@@ -47,11 +49,18 @@ async function loadProducts(params = {}) {
 
 function render(data) {
   document.getElementById("lookbackDays").value = data.settings.lookbackDays;
-  document.getElementById("leadTimeDays").value = data.settings.leadTimeDays;
   document.getElementById("bufferDays").value = data.settings.bufferDays;
   document.getElementById("mockBadge").hidden = !data.mockMode;
 
-  const needsReorder = data.products.filter((p) => p.needsReorder);
+  currentLabels = data.labels || [];
+  renderLabelFilterOptions();
+
+  const selectedLabel = document.getElementById("labelFilter").value;
+  const filtered = selectedLabel === "all"
+    ? data.products
+    : data.products.filter((p) => p.labelId === selectedLabel);
+
+  const needsReorder = filtered.filter((p) => p.needsReorder);
   document.getElementById("reorderCount").textContent = `${needsReorder.length}건`;
 
   const reorderList = document.getElementById("reorderList");
@@ -65,6 +74,30 @@ function render(data) {
   document.querySelectorAll(".product-row").forEach((el) => {
     el.addEventListener("click", () => openDetail(el.dataset.id));
   });
+
+  const unlabeledCount = getUnlabeledProducts().length;
+  const labelBadge = document.getElementById("labelCountBadge");
+  labelBadge.hidden = unlabeledCount === 0;
+  labelBadge.textContent = `미분류 ${unlabeledCount}`;
+
+  if (!hasAutoOpenedLabelPopup) {
+    hasAutoOpenedLabelPopup = true;
+    if (getUnlabeledProducts().length) openLabelManager();
+  }
+}
+
+function renderLabelFilterOptions() {
+  const select = document.getElementById("labelFilter");
+  const prevValue = select.value || "all";
+  select.innerHTML =
+    `<option value="all">전체</option>` +
+    currentLabels.map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join("");
+  select.value = currentLabels.some((l) => l.id === prevValue) ? prevValue : "all";
+}
+
+function getUnlabeledProducts() {
+  if (!currentData) return [];
+  return currentData.products.filter((p) => !p.labelId);
 }
 
 function rowHtml(p) {
@@ -72,7 +105,7 @@ function rowHtml(p) {
   return `
     <div class="product-row ${p.needsReorder ? "urgent" : ""}" data-id="${p.id}">
       <div>
-        <div class="product-name">${escapeHtml(p.name)}</div>
+        <div class="product-name">${escapeHtml(p.name)}${p.label ? `<span class="label-chip">${escapeHtml(p.label.name)}</span>` : ""}</div>
         <div class="product-meta">현재 재고 ${p.stockQuantity}개 · 일평균 판매 ${p.dailyVelocity}개</div>
       </div>
       <div class="days-left ${p.needsReorder ? "" : "safe"}">${daysLeftText}</div>
@@ -168,7 +201,6 @@ function sendReorderMail(p) {
 function currentSettingsParams() {
   return {
     lookbackDays: document.getElementById("lookbackDays").value,
-    leadTimeDays: document.getElementById("leadTimeDays").value,
     bufferDays: document.getElementById("bufferDays").value,
   };
 }
@@ -183,6 +215,167 @@ document.getElementById("closeDetail").addEventListener("click", () => {
 document.getElementById("detailOverlay").addEventListener("click", (e) => {
   if (e.target.id === "detailOverlay") e.target.hidden = true;
 });
+
+function openLabelManager() {
+  renderLabelManagerBody();
+  document.getElementById("labelOverlay").hidden = false;
+}
+
+function renderLabelManagerBody() {
+  const unlabeled = getUnlabeledProducts();
+
+  document.getElementById("labelManagerBody").innerHTML = `
+    <h3>입고유형 라벨 관리</h3>
+
+    <div class="label-create-form">
+      <label>라벨 이름
+        <input id="newLabelName" type="text" placeholder="예: 수입" />
+      </label>
+      <label>리드타임(일)
+        <input id="newLabelLeadTime" type="number" min="0" style="width:80px;" />
+      </label>
+      <button class="btn-secondary" id="createLabelBtn" style="width:auto;">라벨 추가</button>
+    </div>
+
+    <h4>현재 라벨</h4>
+    ${currentLabels.length
+      ? currentLabels
+          .map(
+            (l) => `
+        <div class="unlabeled-row label-edit-row" data-label-id="${l.id}">
+          <label>라벨명
+            <input class="label-edit-name" type="text" value="${escapeAttr(l.name)}" style="width:100px;" />
+          </label>
+          <label>리드타임(일)
+            <input class="label-edit-leadtime" type="number" min="0" value="${l.leadTimeDays}" style="width:70px;" />
+          </label>
+          <div class="form-actions" style="margin-top:0;">
+            <button class="btn-secondary update-label-btn" style="width:auto;">저장</button>
+            <button class="btn-secondary delete-label-btn" style="width:auto; color:var(--danger-ink);">삭제</button>
+          </div>
+        </div>`
+          )
+          .join("")
+      : `<div class="product-meta" style="margin-bottom:16px;">아직 만든 라벨이 없어요. 위에서 먼저 만들어주세요.</div>`}
+
+    <h4>입고유형 라벨이 없는 품목 (${unlabeled.length}개)</h4>
+    ${unlabeled.length
+      ? unlabeled
+          .map(
+            (p) => `
+        <div class="unlabeled-row" data-product-id="${p.id}">
+          <div class="product-name">${escapeHtml(p.name)}</div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <select class="unlabeled-select">
+              <option value="">라벨 선택</option>
+              ${currentLabels.map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join("")}
+            </select>
+            <button class="btn-secondary assign-label-btn" style="width:auto;">저장</button>
+          </div>
+        </div>`
+          )
+          .join("")
+      : `<div class="empty-note">모든 품목에 라벨이 지정돼 있어요.</div>`}
+  `;
+
+  document.getElementById("createLabelBtn").addEventListener("click", createLabelFromForm);
+  document.querySelectorAll(".update-label-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const row = e.target.closest(".unlabeled-row");
+      const name = row.querySelector(".label-edit-name").value.trim();
+      const leadTimeDays = row.querySelector(".label-edit-leadtime").value;
+      if (!name || leadTimeDays === "") {
+        alert("라벨 이름과 리드타임을 모두 입력해주세요.");
+        return;
+      }
+      updateLabelRequest(row.dataset.labelId, name, leadTimeDays);
+    });
+  });
+  document.querySelectorAll(".delete-label-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const row = e.target.closest(".unlabeled-row");
+      if (!confirm("이 라벨을 삭제할까요? 지정돼 있던 품목은 라벨 없음 상태로 돌아가요.")) return;
+      deleteLabelRequest(row.dataset.labelId);
+    });
+  });
+  document.querySelectorAll(".assign-label-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const row = e.target.closest(".unlabeled-row");
+      const labelId = row.querySelector(".unlabeled-select").value;
+      if (!labelId) {
+        alert("라벨을 선택해주세요.");
+        return;
+      }
+      assignLabel(row.dataset.productId, labelId);
+    });
+  });
+}
+
+async function updateLabelRequest(labelId, name, leadTimeDays) {
+  const res = await fetch(`/api/labels/${labelId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, leadTimeDays }),
+  });
+  if (res.ok) {
+    await loadProducts(currentSettingsParams());
+    renderLabelManagerBody();
+  } else {
+    const err = await res.json();
+    alert(err.error || "라벨 수정에 실패했어요.");
+  }
+}
+
+async function deleteLabelRequest(labelId) {
+  const res = await fetch(`/api/labels/${labelId}`, { method: "DELETE" });
+  if (res.ok) {
+    await loadProducts(currentSettingsParams());
+    renderLabelManagerBody();
+  }
+}
+
+async function createLabelFromForm() {
+  const name = document.getElementById("newLabelName").value.trim();
+  const leadTimeDays = document.getElementById("newLabelLeadTime").value;
+  if (!name || leadTimeDays === "") {
+    alert("라벨 이름과 리드타임을 모두 입력해주세요.");
+    return;
+  }
+
+  const res = await fetch("/api/labels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, leadTimeDays }),
+  });
+  if (res.ok) {
+    await loadProducts(currentSettingsParams());
+    renderLabelManagerBody();
+  } else {
+    const err = await res.json();
+    alert(err.error || "라벨 추가에 실패했어요.");
+  }
+}
+
+async function assignLabel(productId, labelId) {
+  const res = await fetch(`/api/suppliers/${productId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ labelId }),
+  });
+  if (res.ok) {
+    await loadProducts(currentSettingsParams());
+    renderLabelManagerBody();
+  }
+}
+
+document.getElementById("openLabelManager").addEventListener("click", openLabelManager);
+document.getElementById("closeLabelManager").addEventListener("click", () => {
+  document.getElementById("labelOverlay").hidden = true;
+});
+document.getElementById("labelOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "labelOverlay") e.target.hidden = true;
+});
+document.getElementById("labelFilter").addEventListener("change", () => render(currentData));
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

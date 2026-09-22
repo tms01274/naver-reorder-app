@@ -35,4 +35,12 @@ function upsertSupplier(productId, info) {
   return all[productId];
 }
 
-module.exports = { getSupplier, getAllSuppliers, upsertSupplier };
+function clearLabelFromAll(labelId) {
+  const all = readAll();
+  for (const info of Object.values(all)) {
+    if (info.labelId === labelId) delete info.labelId;
+  }
+  writeAll(all);
+}
+
+module.exports = { getSupplier, getAllSuppliers, upsertSupplier, clearLabelFromAll };
