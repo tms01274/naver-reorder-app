@@ -19,17 +19,15 @@ async function loadMailTemplate() {
 document.getElementById("saveTemplate").addEventListener("click", async () => {
   const subject = document.getElementById("mtSubject").value;
   const body = document.getElementById("mtBody").value;
-  const res = await fetch("/api/mail-template", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ subject, body }),
-  });
-  if (res.ok) {
-    currentTemplate = await res.json();
-    const note = document.getElementById("templateSavedNote");
-    note.hidden = false;
-    setTimeout(() => (note.hidden = true), 2000);
+  try {
+    currentTemplate = await postJson("/api/mail-template", "POST", { subject, body });
+  } catch (err) {
+    alert(err.message || "양식 저장에 실패했어요.");
+    return;
   }
+  const note = document.getElementById("templateSavedNote");
+  note.hidden = false;
+  setTimeout(() => (note.hidden = true), 2000);
 });
 
 function fillTemplate(template, values) {
@@ -43,17 +41,41 @@ function setListLoading(isLoading) {
   document.getElementById("listLoadingOverlay").hidden = !isLoading;
 }
 
+// 서버 응답이 실패면 서버가 보낸 에러 메시지로 예외를 던진다
+async function fetchJson(url, options) {
+  const res = await fetch(url, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `요청 실패 (${res.status})`);
+  return data;
+}
+
 async function loadProducts(params = {}) {
   setListLoading(true);
+  const qs = new URLSearchParams(params).toString();
   try {
-    const qs = new URLSearchParams(params).toString();
-    const res = await fetch(`/api/products${qs ? "?" + qs : ""}`);
-    const data = await res.json();
+    const data = await fetchJson(`/api/products${qs ? "?" + qs : ""}`);
     currentData = data;
     render(data);
+  } catch (err) {
+    // 품목을 못 불러와도 라벨 관리 등 나머지 기능은 쓸 수 있게 라벨만 따로 불러온다
+    document.getElementById("reorderList").innerHTML =
+      `<div class="empty-note">품목을 불러오지 못했어요: ${escapeHtml(err.message)}</div>`;
+    document.getElementById("reorderCount").textContent = "–";
+    await loadLabels().catch(() => {});
   } finally {
     setListLoading(false);
   }
+}
+
+async function loadLabels() {
+  currentLabels = await fetchJson("/api/labels");
+  renderLabelFilterOptions();
+}
+
+// 라벨 추가/수정/삭제/지정 후 화면 전체를 새로 그린다
+async function refreshAfterLabelChange() {
+  await loadProducts(currentSettingsParams());
+  renderLabelManagerBody();
 }
 
 function render(data) {
@@ -105,7 +127,7 @@ function renderLabelFilterOptions() {
 }
 
 function getUnlabeledProducts() {
-  if (!currentData) return [];
+  if (!currentData?.products) return [];
   return currentData.products.filter((p) => !p.labelId);
 }
 
@@ -151,8 +173,8 @@ function openDetail(productId) {
       <label>이메일
         <input id="supplierEmail" type="email" value="${escapeAttr(supplier.supplierEmail || "")}" placeholder="order@supplier.com" />
       </label>
-      <label>이 품목만의 리드타임(일) — 비워두면 기본값 사용
-        <input id="productLeadTime" type="number" min="0" value="${supplier.leadTimeDays || ""}" />
+      <label>이 품목만의 리드타임(일) — 비워두면 입고유형 라벨의 리드타임 사용
+        <input id="productLeadTime" type="number" min="0" value="${supplier.leadTimeDays ?? ""}" />
       </label>
       <div class="form-actions">
         <button class="btn-secondary" id="saveSupplier" style="width:auto;">저장</button>
@@ -176,15 +198,19 @@ async function saveSupplier(productId) {
   const supplierEmail = document.getElementById("supplierEmail").value.trim();
   const leadTimeDays = document.getElementById("productLeadTime").value;
 
-  const res = await fetch(`/api/suppliers/${productId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ supplierName, supplierEmail, leadTimeDays }),
-  });
-  if (res.ok) {
-    document.getElementById("savedNote").hidden = false;
-    await loadProducts(currentSettingsParams());
-    openDetail(productId);
+  try {
+    await postJson(`/api/suppliers/${productId}`, "POST", { supplierName, supplierEmail, leadTimeDays });
+  } catch (err) {
+    alert(err.message || "저장에 실패했어요.");
+    return;
+  }
+  await loadProducts(currentSettingsParams());
+  openDetail(productId);
+  // openDetail 이 화면을 새로 그리므로 저장됨 표시는 그 뒤에 켠다
+  const note = document.getElementById("savedNote");
+  if (note) {
+    note.hidden = false;
+    setTimeout(() => (note.hidden = true), 2000);
   }
 }
 
@@ -220,6 +246,11 @@ function currentSettingsParams() {
 }
 
 document.getElementById("applySettings").addEventListener("click", async () => {
+  const { lookbackDays, bufferDays } = currentSettingsParams();
+  if (!(Number(lookbackDays) >= 1) || bufferDays === "" || Number(bufferDays) < 0) {
+    alert("판매 속도 계산 기간은 1일 이상, 안전 여유일수는 0일 이상으로 입력해주세요.");
+    return;
+  }
   const btn = document.getElementById("applySettings");
   const originalText = btn.textContent;
   btn.disabled = true;
@@ -336,27 +367,32 @@ function renderLabelManagerBody() {
   });
 }
 
-async function updateLabelRequest(labelId, name, leadTimeDays) {
-  const res = await fetch(`/api/labels/${labelId}`, {
-    method: "PUT",
+function postJson(url, method, payload) {
+  return fetchJson(url, {
+    method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, leadTimeDays }),
+    body: JSON.stringify(payload),
   });
-  if (res.ok) {
-    await loadProducts(currentSettingsParams());
-    renderLabelManagerBody();
-  } else {
-    const err = await res.json();
-    alert(err.error || "라벨 수정에 실패했어요.");
+}
+
+async function updateLabelRequest(labelId, name, leadTimeDays) {
+  try {
+    await postJson(`/api/labels/${labelId}`, "PUT", { name, leadTimeDays });
+  } catch (err) {
+    alert(err.message || "라벨 수정에 실패했어요.");
+    return;
   }
+  await refreshAfterLabelChange();
 }
 
 async function deleteLabelRequest(labelId) {
-  const res = await fetch(`/api/labels/${labelId}`, { method: "DELETE" });
-  if (res.ok) {
-    await loadProducts(currentSettingsParams());
-    renderLabelManagerBody();
+  try {
+    await fetchJson(`/api/labels/${labelId}`, { method: "DELETE" });
+  } catch (err) {
+    alert(err.message || "라벨 삭제에 실패했어요.");
+    return;
   }
+  await refreshAfterLabelChange();
 }
 
 async function createLabelFromForm() {
@@ -367,30 +403,23 @@ async function createLabelFromForm() {
     return;
   }
 
-  const res = await fetch("/api/labels", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, leadTimeDays }),
-  });
-  if (res.ok) {
-    await loadProducts(currentSettingsParams());
-    renderLabelManagerBody();
-  } else {
-    const err = await res.json();
-    alert(err.error || "라벨 추가에 실패했어요.");
+  try {
+    await postJson("/api/labels", "POST", { name, leadTimeDays });
+  } catch (err) {
+    alert(err.message || "라벨 추가에 실패했어요.");
+    return;
   }
+  await refreshAfterLabelChange();
 }
 
 async function assignLabel(productId, labelId) {
-  const res = await fetch(`/api/suppliers/${productId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ labelId }),
-  });
-  if (res.ok) {
-    await loadProducts(currentSettingsParams());
-    renderLabelManagerBody();
+  try {
+    await postJson(`/api/suppliers/${productId}`, "POST", { labelId });
+  } catch (err) {
+    alert(err.message || "라벨 지정에 실패했어요.");
+    return;
   }
+  await refreshAfterLabelChange();
 }
 
 document.getElementById("openLabelManager").addEventListener("click", openLabelManager);
@@ -408,4 +437,4 @@ function escapeHtml(s) {
 function escapeAttr(s) { return escapeHtml(s); }
 
 loadProducts();
-loadMailTemplate();
+loadMailTemplate().catch((err) => console.error("메일 양식을 불러오지 못했어요:", err));

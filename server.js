@@ -43,20 +43,31 @@ async function getCachedOrders(days) {
   return data;
 }
 
-function getSettings(overrides = {}) {
-  const saved = readSettings();
+// 빈 값·숫자 아님·최솟값 미만이면 undefined (= 이 값은 무시)
+function parseDays(value, min) {
+  if (value === undefined || value === null || String(value).trim() === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= min ? n : undefined;
+}
+
+function getSettings(query = {}) {
+  const overrides = {
+    lookbackDays: parseDays(query.lookbackDays, 1),
+    bufferDays: parseDays(query.bufferDays, 0),
+  };
 
   if (overrides.lookbackDays !== undefined || overrides.bufferDays !== undefined) {
     saveSettings({
-      ...(overrides.lookbackDays !== undefined ? { lookbackDays: Number(overrides.lookbackDays) } : {}),
-      ...(overrides.bufferDays !== undefined ? { bufferDays: Number(overrides.bufferDays) } : {}),
+      ...(overrides.lookbackDays !== undefined ? { lookbackDays: overrides.lookbackDays } : {}),
+      ...(overrides.bufferDays !== undefined ? { bufferDays: overrides.bufferDays } : {}),
     });
   }
+  const saved = readSettings();
 
   return {
-    lookbackDays: Number(overrides.lookbackDays ?? saved.lookbackDays ?? process.env.SALES_LOOKBACK_DAYS ?? 14),
+    lookbackDays: Number(saved.lookbackDays ?? process.env.SALES_LOOKBACK_DAYS ?? 14),
     leadTimeDays: Number(process.env.DEFAULT_LEAD_TIME_DAYS ?? 7),
-    bufferDays: Number(overrides.bufferDays ?? saved.bufferDays ?? process.env.DEFAULT_SAFETY_BUFFER_DAYS ?? 3),
+    bufferDays: Number(saved.bufferDays ?? process.env.DEFAULT_SAFETY_BUFFER_DAYS ?? 3),
   };
 }
 
@@ -105,10 +116,20 @@ app.get("/api/products", async (req, res) => {
 app.post("/api/suppliers/:productId", (req, res) => {
   try {
     const { supplierName, supplierEmail, leadTimeDays, labelId } = req.body;
+    let leadTimeUpdate = {};
+    if (leadTimeDays !== undefined) {
+      // 빈 값으로 저장하면 품목별 리드타임을 지워서 라벨 리드타임을 쓰게 한다
+      if (String(leadTimeDays).trim() === "") leadTimeUpdate = { leadTimeDays: undefined };
+      else {
+        const n = parseDays(leadTimeDays, 0);
+        if (n === undefined) return res.status(400).json({ error: "리드타임은 0 이상의 숫자로 입력해주세요." });
+        leadTimeUpdate = { leadTimeDays: n };
+      }
+    }
     const saved = upsertSupplier(req.params.productId, {
       ...(supplierName !== undefined ? { supplierName } : {}),
       ...(supplierEmail !== undefined ? { supplierEmail } : {}),
-      ...(leadTimeDays ? { leadTimeDays: Number(leadTimeDays) } : {}),
+      ...leadTimeUpdate,
       ...(labelId !== undefined ? { labelId } : {}),
     });
     res.json(saved);
@@ -128,8 +149,9 @@ app.post("/api/labels", (req, res) => {
   try {
     const { name, leadTimeDays } = req.body;
     if (!name || !String(name).trim()) throw new Error("라벨 이름을 입력해주세요.");
-    if (leadTimeDays === undefined || leadTimeDays === "") throw new Error("리드타임을 입력해주세요.");
-    const saved = createLabel({ name: String(name).trim(), leadTimeDays });
+    const days = parseDays(leadTimeDays, 0);
+    if (days === undefined) throw new Error("리드타임은 0 이상의 숫자로 입력해주세요.");
+    const saved = createLabel({ name: String(name).trim(), leadTimeDays: days });
     res.json(saved);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -140,9 +162,12 @@ app.post("/api/labels", (req, res) => {
 app.put("/api/labels/:id", (req, res) => {
   try {
     const { name, leadTimeDays } = req.body;
+    if (name !== undefined && !String(name).trim()) throw new Error("라벨 이름을 입력해주세요.");
+    const days = leadTimeDays === undefined ? undefined : parseDays(leadTimeDays, 0);
+    if (leadTimeDays !== undefined && days === undefined) throw new Error("리드타임은 0 이상의 숫자로 입력해주세요.");
     const saved = updateLabel(req.params.id, {
       ...(name !== undefined ? { name: String(name).trim() } : {}),
-      ...(leadTimeDays !== undefined ? { leadTimeDays } : {}),
+      ...(days !== undefined ? { leadTimeDays: days } : {}),
     });
     if (!saved) return res.status(404).json({ error: "라벨을 찾을 수 없어요." });
     res.json(saved);
