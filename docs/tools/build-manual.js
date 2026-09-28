@@ -102,7 +102,25 @@ async function captureScreens(url) {
   await wait(200);
   await p.click('[data-copy="orderTo"]');
   await shot("09-mail");
+  // 발주 완료로 기록 → 기록 영역만 잘라서
+  await p.click("#orderRecord");
+  await wait(800);
+  await p.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.remove()));
+  const bar = await p.evaluate(() => {
+    const r = document.querySelector("#orderOverlay .record-bar").getBoundingClientRect();
+    return { x: r.x - 16, y: r.y - 70, width: r.width + 32, height: r.height + 86 };
+  });
+  await p.screenshot({ path: path.join(SHOTS, "12-record.png"), clip: bar });
   await p.setViewport({ width: 1280, height: 820, deviceScaleFactor: 1.5 });
+  await closeAll();
+
+  await p.click('.tab[data-tab="pending"]');
+  await wait(200);
+  await shot("13-pending", { x: 0, y: 280, width: 1280, height: 420 });
+  await p.click('.tab[data-tab="reorder"]');
+  await p.click("#openOrdersBtn");
+  await wait(300);
+  await shot("14-orders");
   await closeAll();
 
   await p.click("#openVendorManager");

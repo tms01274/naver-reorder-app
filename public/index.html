@@ -58,6 +58,7 @@
       </div>
       <div class="page-head-actions">
         <button id="refreshBtn" class="btn-outline">새로고침</button>
+        <button id="openOrdersBtn" class="btn-outline">발주 기록 <span id="pendingCountBadge" class="count-pill" hidden></span></button>
         <button id="openOrderBtn" class="btn-primary">발주서 만들기</button>
       </div>
     </section>
@@ -86,6 +87,7 @@
         <div class="tabs" role="tablist">
           <button class="tab active" data-tab="reorder">발주 필요 <span class="tab-count" id="tabCountReorder">0</span></button>
           <button class="tab" data-tab="soon">곧 필요 <span class="tab-count" id="tabCountSoon">0</span></button>
+          <button class="tab" data-tab="pending">입고 대기 <span class="tab-count" id="tabCountPending">0</span></button>
           <button class="tab" data-tab="all">전체 <span class="tab-count" id="tabCountAll">0</span></button>
         </div>
         <div class="toolbar-right">
@@ -143,6 +145,14 @@
     <div class="modal modal-wide">
       <button class="btn-close" data-close="orderOverlay" aria-label="닫기">×</button>
       <div id="orderBody"></div>
+    </div>
+  </div>
+
+  <!-- 발주 기록 -->
+  <div id="ordersOverlay" class="overlay" hidden>
+    <div class="modal modal-wide modal-fixed">
+      <button class="btn-close" data-close="ordersOverlay" aria-label="닫기">×</button>
+      <div id="ordersBody"></div>
     </div>
   </div>
 

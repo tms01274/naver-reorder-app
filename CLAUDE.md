@@ -15,6 +15,7 @@
 | 경로 | 내용 |
 |---|---|
 | `server.js` | Express 서버. `/api/products`(네이버 상품+주문 → 발주 계산, 3분 캐시, `?fresh=1` 로 캐시 무시), `/api/suppliers/:id`(품목의 vendorId·labelId·리드타임), `/api/labels`·`/api/vendors`(+`/assign` 일괄 지정), `/api/mail-template`, `/api/whats-new`(+`/seen`), `/docs` 정적 제공 |
+| `src/orders.js` | 발주 기록(`data/orders.json`). 입고 안 된 수량은 `/api/products` 에서 들어올 재고로 더해 발주 필요·권장 수량을 다시 계산(`applyPendingOrder`). 입고 처리해도 네이버 재고는 사람이 올려야 함 |
 | `src/vendors.js` | 거래 업체(이름·이메일). 서버 시작 시 예전 품목별 업체명/이메일을 업체 목록으로 옮김 |
 | 발주 흐름 | 화면의 "발주서 만들기": 업체 선택 → 그 업체 품목(발주 필요는 미리 체크)·수량 수정 → 메일 한 통 분량 생성 → 받는 사람·제목·본문 각각 복사해 **네이버 웹메일**에 붙여넣기 (매장은 웹메일 사용, 앱이 직접 발송하지 않음). 메일 양식은 `{{품목목록}}` 필수 |
 | 해외 업체 | 업체마다 발주서 언어(`lang`: ko/en/zh). 메일 양식은 언어별(`src/mailTemplate.js` 의 `DEFAULT_TEMPLATES`, 자리표시자는 언어 상관없이 한글 키). 품목별 `vendorItemName`(업체용 품명)이 있으면 발주서에 그 이름 사용 — 자동 번역은 하지 않음. 보내는 사람: `SENDER_NAME`(ko) / `SENDER_NAME_EN`(en·zh) |
@@ -40,13 +41,16 @@
 
 1. **먼저 GitHub 최신 내용 확인**: `git fetch origin` → `git log HEAD..origin/main` 으로 다른 PC 에서 올린 커밋이 있는지 본다.
    있으면 작업 내용을 보존한 채 받아서 합친다 (`git stash` → `git merge --ff-only origin/main` 또는 `git pull --rebase` → `git stash pop`, 충돌은 양쪽 변경을 모두 살려서 해결). 받은 내용을 사용자에게 한 줄로 알린다.
-2. 새 기능이 있으면 `docs/tools/e2e-test.js` 에 그 기능 검사를 추가하고, `cd docs/tools && node e2e-test.js` 로 **모두 통과** 확인 (최신 내용과 합친 뒤에 실행). 실패하면 고치고 다시 돌린다.
+2. **지난 push 이후 추가·수정된 기능의 테스트 묶음만** 돌린다 (관리자 지시: 전체 테스트는 오래 걸림). `cd docs/tools && node e2e-test.js <묶음...>` — 묶음 목록은 `node e2e-test.js --list`.
+   - 새 기능/바뀐 동작은 해당 묶음에 검사를 추가·수정한 뒤 그 묶음을 돌린다. 한 번 통과하면 된다 (여러 번 반복하지 않음).
+   - 어느 묶음인지: 라벨 관리 → `labels`, 첫 화면 목록·통계 → `main`, 업체 관리 → `vendors`, 발주서 → `order`, 발주 기록·입고 대기 → `records`, 품목 상세 → `detail`, 해외 업체·언어 → `overseas`, 판단 기준 → `settings`, 메일 양식 → `template`, 가이드·업데이트 기록 → `whatsnew`, 데이터 형식·옮기기 → `migration`, 공통 화면(팝업 구조, CSS, id) → `layout`.
+   - 여러 화면이 함께 쓰는 코드(`fetchJson`, `render`, 공통 팝업, `server.js` 의 `/api/products` 등)를 고쳤을 때만 전체(`node e2e-test.js`)를 돌린다.
 3. **지난 push 이후 바뀐 프로그램 내용을 한꺼번에 `src/changelog.js` 맨 위에 정리**한다. 관리자가 따로 말하지 않아도 매번 한다.
    - 매장 PC 사용자(비개발자)가 읽는 글: 쉬운 해요체, 무엇이 달라졌고 어떻게 쓰는지 위주. 내부 구조·파일명·버그 원인 같은 개발 용어는 쓰지 않는다.
    - id 는 날짜 기반으로 겹치지 않게 (같은 날 두 번째면 `2026-10-05-2`). 같은 날 아직 push 하지 않은 항목이 있으면 새로 만들지 말고 그 항목에 합친다.
    - 사용자에게 보이는 변화가 전혀 없는 커밋(문서·개발 도구만 등)은 항목을 추가하지 않는다.
    - 항목이 추가되면 매장 PC 의 가이드 버튼이 파랗게 강조되고, 사용자가 열어보면 원래대로 돌아간다.
-4. 화면이 바뀌었으면 `node build-manual.js` 로 설명서 재생성 (`manual-content.js` 에서 문구 수정)
+4. **설명서에 나오는 화면·사용법이 바뀌었을 때만** `node build-manual.js` 로 설명서 재생성 (`manual-content.js` 에서 문구 수정). 설명서와 상관없는 수정이면 건너뛴다.
 5. 커밋하고 **바로 push 까지 한다** (관리자 지시: 커밋 요청 = 커밋 + push). 매장 PC 는 아이콘을 누를 때 자동으로 받아 적용
 
 ## 꼭 지켜야 할 것 (과거에 문제가 됐던 부분)

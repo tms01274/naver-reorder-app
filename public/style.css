@@ -600,6 +600,64 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .mail-field-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 0.84rem; font-weight: 700; color: var(--ink-2); }
 .btn-outline.copied { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
 
+/* ── 발주 기록 ──────────────────────────── */
+.pending-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-radius: 999px;
+  padding: 1px 9px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.pending-chip.late { color: var(--warn); background: var(--warn-soft); }
+.pending-note { font-size: 0.74rem; color: var(--brand); font-weight: 600; }
+.count-pill { font-size: 0.72rem; font-weight: 700; color: var(--brand); background: var(--brand-soft); border-radius: 999px; padding: 1px 8px; }
+
+.record-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--warn-soft);
+  border: 1px solid #f1dfb8;
+  flex-wrap: wrap;
+}
+.record-bar.done { background: var(--ok-soft); border-color: #cfe9da; }
+.record-text { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 2px; font-size: 0.84rem; color: var(--ink-2); }
+.record-text strong { font-size: 0.95rem; color: var(--ink); }
+
+.orders-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; flex-shrink: 0; }
+.orders-toolbar .manager-tabs { margin: 4px 0 14px; }
+.orders-toolbar select.input { padding: 7px 30px 7px 10px; margin-bottom: 10px; }
+.order-card { border: 1px solid var(--line); border-radius: 14px; margin-bottom: 12px; overflow: hidden; }
+.order-card.done { opacity: 0.75; }
+.order-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.order-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 60px 160px 84px;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+.order-item:last-child { border-bottom: none; }
+.order-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.order-item .name small { display: block; color: var(--brand); font-weight: 600; font-size: 0.74rem; }
+.order-item-state { font-size: 0.82rem; color: var(--muted); }
+.order-item-state.received { color: var(--ok); font-weight: 600; }
+.order-item-state.late { color: var(--warn); font-weight: 700; }
+@media (max-width: 860px) {
+  .order-item { grid-template-columns: 1fr auto; }
+  .order-item-state { grid-column: 1; }
+}
+
 /* ── 업데이트 내용 · 가이드 ─────────────── */
 .guide-btn .new-dot, .guide-btn .new-badge { display: none; }
 .guide-btn.has-new {

@@ -7,6 +7,7 @@ const { execFile } = require("child_process");
 const { computeReorderList } = require("./src/reorderLogic");
 const { getAllSuppliers, upsertSupplier, clearFieldFromAll, setFieldForProducts, migrateSuppliers } = require("./src/suppliers");
 const { getAllVendors, createVendor, updateVendor, deleteVendor, migrateLegacySupplierFields } = require("./src/vendors");
+const { listOrders, createOrder, receiveOrder, unreceiveItem, deleteOrder, pendingByProduct } = require("./src/orders");
 const { getTemplates, saveTemplate, getSenderNames, PLACEHOLDERS, LANGUAGES, LANG_CODES } = require("./src/mailTemplate");
 const { getAllLabels, createLabel, updateLabel, deleteLabel } = require("./src/inboundLabels");
 const { readSettings, saveSettings } = require("./src/settings");
@@ -82,6 +83,20 @@ function getSettings(query = {}) {
   };
 }
 
+// 이미 발주해서 들어올 수량을 재고에 더해 "발주 필요"와 권장 수량을 다시 계산한다.
+// 충분히 발주했으면 발주 필요에서 빠지고, 모자라면 남은 수량만 권장한다.
+function applyPendingOrder(p, pending) {
+  if (!pending || pending.qty <= 0) return { ...p, pendingOrder: null };
+  const covered = p.stockQuantity + pending.qty;
+  const needsReorder = p.dailyVelocity > 0 ? covered / p.dailyVelocity <= p.leadTimeDays : covered === 0;
+  return {
+    ...p,
+    needsReorder,
+    recommendedOrderQty: Math.max(0, p.recommendedOrderQty - pending.qty),
+    pendingOrder: pending,
+  };
+}
+
 // 재주문 필요 품목 리스트 (+ 전체 품목)
 app.get("/api/products", async (req, res) => {
   try {
@@ -106,12 +121,13 @@ app.get("/api/products", async (req, res) => {
       if (effective !== undefined && effective !== null) leadTimeOverrides[pid] = Number(effective);
     }
 
+    const pending = pendingByProduct();
     const list = computeReorderList(products, orders, settings, leadTimeOverrides).map((p) => {
       const supplierInfo = suppliers[p.id] || null;
       const labelId = supplierInfo?.labelId && labels[supplierInfo.labelId] ? supplierInfo.labelId : null;
       const vendorId = supplierInfo?.vendorId && vendors[supplierInfo.vendorId] ? supplierInfo.vendorId : null;
       return {
-        ...p,
+        ...applyPendingOrder(p, pending[p.id]),
         supplier: supplierInfo,
         labelId,
         label: labelId ? { id: labelId, ...labels[labelId] } : null,
@@ -287,6 +303,58 @@ app.post("/api/vendors/assign", (req, res) => {
 app.delete("/api/vendors/:id", (req, res) => {
   deleteVendor(req.params.id);
   clearFieldFromAll("vendorId", req.params.id);
+  res.json({ ok: true });
+});
+
+// ── 발주 기록 ──────────────────────────────────────────
+
+app.get("/api/orders", (req, res) => {
+  res.json(listOrders());
+});
+
+// 발주서 화면의 "발주 완료로 기록"
+// body: { vendorId, items: [{ productId, name, vendorItemName?, qty, leadTimeDays }] }
+app.post("/api/orders", (req, res) => {
+  const { vendorId, items } = req.body;
+  const vendor = getAllVendors()[vendorId];
+  if (!vendor) return res.status(400).json({ error: "업체를 찾을 수 없어요." });
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: "기록할 품목이 없어요." });
+  const now = Date.now();
+  const clean = [];
+  for (const it of items) {
+    const qty = Math.floor(Number(it.qty));
+    if (!it.productId || !(qty > 0)) return res.status(400).json({ error: "품목과 수량을 확인해주세요." });
+    const lead = Number.isFinite(Number(it.leadTimeDays)) && Number(it.leadTimeDays) >= 0 ? Number(it.leadTimeDays) : 7;
+    clean.push({
+      productId: String(it.productId),
+      name: String(it.name || it.productId),
+      ...(it.vendorItemName ? { vendorItemName: String(it.vendorItemName) } : {}),
+      qty,
+      // 입고 예정일 = 발주일 + 그 품목의 리드타임
+      expectedAt: new Date(now + lead * 24 * 60 * 60 * 1000).toISOString(),
+    });
+  }
+  res.json(createOrder({ vendorId, vendorName: vendor.name, items: clean }));
+});
+
+// 입고 처리 (productIds 없으면 그 발주 전체)
+app.post("/api/orders/:id/receive", (req, res) => {
+  const { productIds } = req.body || {};
+  const saved = receiveOrder(req.params.id, Array.isArray(productIds) ? productIds.map(String) : null);
+  if (!saved) return res.status(404).json({ error: "발주 기록을 찾을 수 없어요." });
+  res.json(saved);
+});
+
+// 입고 처리 되돌리기
+app.post("/api/orders/:id/unreceive", (req, res) => {
+  const saved = unreceiveItem(req.params.id, String(req.body?.productId || ""));
+  if (!saved) return res.status(404).json({ error: "발주 기록을 찾을 수 없어요." });
+  res.json(saved);
+});
+
+// 발주 취소 (잘못 기록했을 때)
+app.delete("/api/orders/:id", (req, res) => {
+  deleteOrder(req.params.id);
   res.json({ ok: true });
 });
 

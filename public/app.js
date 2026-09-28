@@ -100,8 +100,33 @@ function sortByUrgency(list) {
   });
 }
 
+// 이미 발주해서 입고를 기다리는 품목은 "곧 필요"에서 뺀다
 function isSoon(p) {
-  return statusOf(p).level === "warn";
+  return statusOf(p).level === "warn" && !p.pendingOrder;
+}
+
+function shortDate(iso) {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function daysAgoText(iso) {
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  return days <= 0 ? "오늘" : `${days}일 전`;
+}
+
+// 입고 예정일이 지났는지
+function isLate(iso) {
+  const end = new Date(iso);
+  end.setHours(23, 59, 59, 999);
+  return end.getTime() < Date.now();
+}
+
+// "발주함 50개 · 10/5 예정" (예정일이 지나면 "입고 지연")
+function pendingChip(po) {
+  if (!po) return "";
+  const late = isLate(po.expectedAt);
+  return `<span class="pending-chip ${late ? "late" : ""}" title="${daysAgoText(po.orderedAt)} 발주">${late ? "입고 지연" : "발주함"} ${po.qty}개 · ${shortDate(po.expectedAt)} 예정</span>`;
 }
 
 function labelChip(label) {
@@ -191,6 +216,9 @@ function render() {
   const badge = $("labelCountBadge");
   badge.hidden = unlabeledCount === 0;
   badge.textContent = unlabeledCount;
+  const pendingCount = products.filter((p) => p.pendingOrder).length;
+  $("pendingCountBadge").hidden = pendingCount === 0;
+  $("pendingCountBadge").textContent = `입고 대기 ${pendingCount}`;
   const noVendorCount = getProductsWithoutVendor().length;
   $("vendorCountBadge").hidden = noVendorCount === 0;
   $("vendorCountBadge").textContent = noVendorCount;
@@ -223,10 +251,12 @@ function renderList() {
   const byTab = {
     reorder: base.filter((p) => p.needsReorder),
     soon: base.filter(isSoon),
+    pending: base.filter((p) => p.pendingOrder),
     all: base,
   };
   $("tabCountReorder").textContent = byTab.reorder.length;
   $("tabCountSoon").textContent = byTab.soon.length;
+  $("tabCountPending").textContent = byTab.pending.length;
   $("tabCountAll").textContent = byTab.all.length;
 
   document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === activeTab));
@@ -235,6 +265,7 @@ function renderList() {
   const emptyText = {
     reorder: "<strong>지금 발주가 필요한 품목이 없어요</strong>재고가 넉넉해요.",
     soon: "<strong>곧 발주가 필요한 품목이 없어요</strong>",
+    pending: "<strong>입고를 기다리는 품목이 없어요</strong>발주서를 보낸 뒤 '발주 완료로 기록'을 누르면 여기에 나와요.",
     all: "<strong>조건에 맞는 품목이 없어요</strong>",
   }[activeTab];
   $("productList").innerHTML = list.length
@@ -249,7 +280,7 @@ function rowHtml(p) {
     <button class="product-row" data-id="${escapeHtml(p.id)}">
       <div>
         <div class="product-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
-        <div class="product-sub">${labelChip(p.label)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
+        <div class="product-sub">${labelChip(p.label)}${pendingChip(p.pendingOrder)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
       </div>
       <div class="num"><span class="cell-label">재고</span>${p.stockQuantity}개</div>
       <div class="num"><span class="cell-label">일평균 판매</span>${p.dailyVelocity}개</div>
@@ -300,6 +331,7 @@ function openDetail(productId) {
       <div class="detail-meta">
         <span class="status ${s.level}">${s.text}</span>
         ${labelChip(p.label)}
+        ${pendingChip(p.pendingOrder)}
         <span>품목 ID ${escapeHtml(p.id)}</span>
       </div>
     </div>
@@ -412,6 +444,7 @@ const order = {
   extraIds: [], // 업체에 연결되지 않았지만 직접 추가한 품목
   step: "items",
   addSearch: "",
+  recorded: false, // 이 발주서를 이미 발주 기록으로 남겼는지 (두 번 기록 방지)
 };
 
 function productById(id) {
@@ -441,6 +474,7 @@ function selectOrderVendor(vendorId, preselectId) {
   order.extraIds = [];
   order.step = "items";
   order.addSearch = "";
+  order.recorded = false;
   if (preselectId) {
     const p = productById(preselectId);
     if (p && p.vendorId !== vendorId) order.extraIds.push(preselectId);
@@ -544,6 +578,7 @@ function orderRowHtml(p, item) {
       <span class="order-name">
         <span class="name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
         ${p.supplier?.vendorItemName ? `<span class="vendor-item-name">업체용 품명: ${escapeHtml(p.supplier.vendorItemName)}</span>` : ""}
+        ${p.pendingOrder ? `<span class="pending-note">이미 발주함 · ${daysAgoText(p.pendingOrder.orderedAt)} ${p.pendingOrder.qty}개 (${shortDate(p.pendingOrder.expectedAt)} 입고 예정)</span>` : ""}
         ${p.vendorId !== order.vendorId ? `<span class="vendor-chip other">${p.vendor ? `${escapeHtml(p.vendor.name)} 품목` : "업체 미지정"}</span>` : ""}
       </span>
       <span class="num">${p.stockQuantity}개</span>
@@ -635,6 +670,39 @@ function bindOrderEvents() {
   });
 }
 
+// 발주서로 만든 품목·수량을 발주 기록으로 남긴다 (입고 대기 표시, 중복 발주 방지)
+async function recordCurrentOrder() {
+  const btn = $("orderRecord");
+  const lines = selectedOrderLines();
+  if (!lines.length || order.recorded) return;
+  btn.disabled = true;
+  try {
+    await postJson("/api/orders", "POST", {
+      vendorId: order.vendorId,
+      items: lines.map(({ p, item }) => ({
+        productId: p.id,
+        name: p.name,
+        vendorItemName: p.supplier?.vendorItemName || "",
+        qty: item.qty,
+        leadTimeDays: p.leadTimeDays,
+      })),
+    });
+  } catch (err) {
+    btn.disabled = false;
+    toast(err.message || "기록하지 못했어요.", "error");
+    return;
+  }
+  order.recorded = true;
+  toast(`${lines.length}개 품목의 발주를 기록했어요`);
+  // 메일 화면에서 고친 내용이 지워지지 않게, 발주서 창은 다시 그리지 않고 기록 영역만 바꾼다
+  const bar = btn.closest(".record-bar");
+  bar.classList.add("done");
+  bar.querySelector("strong").textContent = "발주를 기록했어요";
+  bar.querySelector(".record-text span").textContent = "이 품목들은 '입고 대기'로 표시돼요. 입고되면 '발주 기록'에서 입고 완료를 눌러주세요.";
+  btn.textContent = "기록됨 ✓";
+  await loadProducts();
+}
+
 function renderOrderMail() {
   const mail = buildOrderMail();
   const vendor = vendorById(order.vendorId);
@@ -644,6 +712,7 @@ function renderOrderMail() {
       <li><b>네이버 메일 열기</b>를 눌러 메일 쓰기 화면을 열어요.</li>
       <li>아래 <b>받는 사람 · 제목 · 본문</b>을 차례로 <b>복사</b>해서 붙여넣어요.</li>
       <li>내용을 확인하고 네이버 메일에서 <b>보내기</b>를 눌러요.</li>
+      <li>보냈으면 맨 아래 <b>발주 완료로 기록</b>을 눌러요.</li>
     </ol>
     <div class="mail-field">
       <div class="mail-field-head"><span>받는 사람</span><button type="button" class="btn-outline btn-sm" data-copy="orderTo">복사</button></div>
@@ -664,7 +733,15 @@ function renderOrderMail() {
       <button class="btn-ghost btn-sm" id="orderMailto">PC 메일 프로그램으로 열기</button>
       <a class="btn-primary" id="orderOpenNaver" href="https://mail.naver.com/" target="_blank" rel="noopener">네이버 메일 열기</a>
     </div>
+    <div class="record-bar ${order.recorded ? "done" : ""}">
+      <div class="record-text">
+        <strong>${order.recorded ? "발주를 기록했어요" : "메일을 보냈으면 기록해 두세요"}</strong>
+        <span>${order.recorded ? "이 품목들은 '입고 대기'로 표시돼요. 입고되면 '발주 기록'에서 입고 완료를 눌러주세요." : "기록하면 '입고 대기'로 표시되고, 같은 품목을 또 발주하지 않게 알려줘요."}</span>
+      </div>
+      <button class="btn-primary" id="orderRecord" ${order.recorded ? "disabled" : ""}>${order.recorded ? "기록됨 ✓" : "발주 완료로 기록"}</button>
+    </div>
   `;
+  $("orderRecord").addEventListener("click", recordCurrentOrder);
   document.querySelectorAll("[data-copy]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const ok = await copyText($(btn.dataset.copy).value);
@@ -964,6 +1041,119 @@ async function createVendorFromForm() {
   await refreshAfterLabelChange();
 }
 
+// ── 발주 기록 ───────────────────────────────────────
+// 입고 대기(아직 안 들어온 발주) / 전체 기록 두 탭. 품목별 또는 발주 전체를 입고 처리하고, 잘못 기록한 발주는 취소한다.
+
+const ordersState = { tab: "pending", vendor: "all", orders: [] };
+
+async function openOrders() {
+  ordersState.tab = "pending";
+  ordersState.vendor = "all";
+  await reloadOrders();
+  openModal("ordersOverlay");
+}
+
+async function reloadOrders() {
+  try {
+    ordersState.orders = await fetchJson("/api/orders");
+  } catch (err) {
+    toast(err.message || "발주 기록을 불러오지 못했어요.", "error");
+  }
+  renderOrders();
+}
+
+function isOpenOrder(o) {
+  return o.items.some((i) => !i.receivedAt);
+}
+
+function renderOrders() {
+  const s = ordersState;
+  const all = s.orders;
+  const open = all.filter(isOpenOrder);
+  const source = s.tab === "pending" ? open : all;
+  const list = s.vendor === "all" ? source : source.filter((o) => o.vendorId === s.vendor);
+  const vendorIds = [...new Set(all.map((o) => o.vendorId))];
+
+  const cards = list.map((o) => {
+    const received = o.items.filter((i) => i.receivedAt).length;
+    const done = received === o.items.length;
+    return `
+      <div class="order-card ${done ? "done" : ""}" data-order-id="${escapeHtml(o.id)}">
+        <div class="order-card-head">
+          <strong>${escapeHtml(vendorById(o.vendorId)?.name || o.vendorName)}</strong>
+          <span class="muted small">${shortDate(o.createdAt)} 발주 · ${daysAgoText(o.createdAt)} · ${o.items.length}개 품목</span>
+          <span class="status ${done ? "ok" : received ? "warn" : "none"}">${done ? "입고 완료" : `입고 ${received}/${o.items.length}`}</span>
+          <span class="spacer"></span>
+          ${done ? "" : `<button class="btn-outline btn-sm" data-receive-all>모두 입고 완료</button>`}
+          <button class="btn-danger-ghost btn-sm" data-cancel-order>발주 취소</button>
+        </div>
+        <div class="order-card-items">
+          ${o.items.map((i) => {
+            const late = !i.receivedAt && isLate(i.expectedAt);
+            return `
+            <div class="order-item" data-product-id="${escapeHtml(i.productId)}">
+              <span class="name">${escapeHtml(i.name)}${i.vendorItemName ? `<small>업체용: ${escapeHtml(i.vendorItemName)}</small>` : ""}</span>
+              <span class="num">${i.qty}개</span>
+              <span class="order-item-state ${i.receivedAt ? "received" : late ? "late" : ""}">${i.receivedAt ? `입고 ${shortDate(i.receivedAt)}` : late ? `입고 지연 (${shortDate(i.expectedAt)} 예정)` : `${shortDate(i.expectedAt)} 입고 예정`}</span>
+              ${i.receivedAt ? `<button class="btn-ghost btn-sm" data-unreceive>되돌리기</button>` : `<button class="btn-outline btn-sm" data-receive>입고</button>`}
+            </div>`;
+          }).join("")}
+        </div>
+      </div>`;
+  }).join("");
+
+  $("ordersBody").innerHTML = `
+    <h3>발주 기록</h3>
+    <p class="modal-desc">발주서에서 '발주 완료로 기록'한 내용이에요. 물건이 들어오면 <b>입고</b>를 눌러주세요. 입고 전까지는 발주한 수량을 들어올 재고로 계산해서, 같은 품목이 다시 '발주 필요'로 뜨지 않아요.</p>
+    <div class="orders-toolbar">
+      <div class="tabs manager-tabs" role="tablist">
+        <button type="button" class="tab ${s.tab === "pending" ? "active" : ""}" data-orders-tab="pending">입고 대기 ${open.length ? `<span class="dot-badge">${open.length}</span>` : ""}</button>
+        <button type="button" class="tab ${s.tab === "all" ? "active" : ""}" data-orders-tab="all">전체 기록 <span class="tab-count">${all.length}</span></button>
+      </div>
+      ${vendorIds.length > 1 ? `
+        <select id="ordersVendorFilter" class="input" aria-label="업체">
+          <option value="all">모든 업체</option>
+          ${vendorIds.map((id) => `<option value="${escapeHtml(id)}" ${s.vendor === id ? "selected" : ""}>${escapeHtml(vendorById(id)?.name || all.find((o) => o.vendorId === id).vendorName)}</option>`).join("")}
+        </select>` : ""}
+    </div>
+    <div class="manager-pane">
+      ${list.length ? cards : `<div class="empty-note">${s.tab === "pending" ? "<strong>입고를 기다리는 발주가 없어요</strong>발주서를 보낸 뒤 '발주 완료로 기록'을 누르면 여기에 나와요." : "<strong>발주 기록이 없어요</strong>"}</div>`}
+    </div>
+  `;
+
+  document.querySelectorAll("[data-orders-tab]").forEach((b) => {
+    b.addEventListener("click", () => { s.tab = b.dataset.ordersTab; renderOrders(); });
+  });
+  $("ordersVendorFilter")?.addEventListener("change", (e) => { s.vendor = e.target.value; renderOrders(); });
+
+  const act = async (fn, message) => {
+    try {
+      await fn();
+    } catch (err) {
+      toast(err.message || "처리하지 못했어요.", "error");
+      return;
+    }
+    if (message) toast(message);
+    await reloadOrders();
+    await loadProducts();
+  };
+  document.querySelectorAll("#ordersBody .order-card").forEach((card) => {
+    const id = card.dataset.orderId;
+    card.querySelector("[data-receive-all]")?.addEventListener("click", () =>
+      act(() => postJson(`/api/orders/${id}/receive`, "POST", {}), "모두 입고 완료로 표시했어요"));
+    const cancel = card.querySelector("[data-cancel-order]");
+    cancel.addEventListener("click", () =>
+      confirmClick(cancel, "한 번 더 누르면 취소", () => act(() => fetchJson(`/api/orders/${id}`, { method: "DELETE" }), "발주 기록을 취소했어요")));
+    card.querySelectorAll(".order-item").forEach((row) => {
+      const productId = row.dataset.productId;
+      row.querySelector("[data-receive]")?.addEventListener("click", () =>
+        act(() => postJson(`/api/orders/${id}/receive`, "POST", { productIds: [productId] }), "입고 완료로 표시했어요"));
+      row.querySelector("[data-unreceive]")?.addEventListener("click", () =>
+        act(() => postJson(`/api/orders/${id}/unreceive`, "POST", { productId }), "입고 표시를 되돌렸어요"));
+    });
+  });
+}
+
 // ── 판단 기준 ───────────────────────────────────────
 
 function openSettings() {
@@ -1258,6 +1448,7 @@ document.querySelectorAll("[data-guide-tab]").forEach((t) => {
 $("openLabelManager").addEventListener("click", () => openLabelManager());
 $("openVendorManager").addEventListener("click", () => openVendorManager());
 $("openOrderBtn").addEventListener("click", () => openOrder());
+$("openOrdersBtn").addEventListener("click", () => openOrders());
 $("statUnlabeledCard").addEventListener("click", () => openLabelManager("assign"));
 $("openMailTemplate").addEventListener("click", openMailTemplate);
 $("mtLangTabs").addEventListener("click", (e) => {
