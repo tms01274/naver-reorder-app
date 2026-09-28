@@ -32,6 +32,9 @@
         <button id="openLabelManager" class="btn-ghost">
           라벨 관리 <span id="labelCountBadge" class="dot-badge" hidden></span>
         </button>
+        <button id="openVendorManager" class="btn-ghost">
+          업체 관리 <span id="vendorCountBadge" class="dot-badge" hidden></span>
+        </button>
         <button id="openMailTemplate" class="btn-ghost">메일 양식</button>
         <button id="openSettings" class="btn-ghost">판단 기준</button>
       </nav>
@@ -53,7 +56,10 @@
         <h1>오늘의 발주</h1>
         <p class="page-sub" id="criteriaText">데이터를 불러오는 중이에요</p>
       </div>
-      <button id="refreshBtn" class="btn-outline">새로고침</button>
+      <div class="page-head-actions">
+        <button id="refreshBtn" class="btn-outline">새로고침</button>
+        <button id="openOrderBtn" class="btn-primary">발주서 만들기</button>
+      </div>
     </section>
 
     <section class="stats">
@@ -118,9 +124,25 @@
 
   <!-- 라벨 관리 -->
   <div id="labelOverlay" class="overlay" hidden>
-    <div class="modal modal-wide">
+    <div class="modal modal-wide modal-fixed">
       <button class="btn-close" id="closeLabelManager" data-close="labelOverlay" aria-label="닫기">×</button>
       <div id="labelManagerBody"></div>
+    </div>
+  </div>
+
+  <!-- 업체 관리 -->
+  <div id="vendorOverlay" class="overlay" hidden>
+    <div class="modal modal-wide modal-fixed">
+      <button class="btn-close" data-close="vendorOverlay" aria-label="닫기">×</button>
+      <div id="vendorManagerBody"></div>
+    </div>
+  </div>
+
+  <!-- 발주서 만들기 -->
+  <div id="orderOverlay" class="overlay" hidden>
+    <div class="modal modal-wide">
+      <button class="btn-close" data-close="orderOverlay" aria-label="닫기">×</button>
+      <div id="orderBody"></div>
     </div>
   </div>
 
@@ -149,7 +171,8 @@
     <div class="modal">
       <button class="btn-close" data-close="mailOverlay" aria-label="닫기">×</button>
       <h3>발주 메일 양식</h3>
-      <p class="modal-desc">품목 상세에서 "발주 메일 작성"을 누르면 이 양식으로 메일이 채워져요. 아래 항목을 누르면 커서 위치에 들어가요.</p>
+      <p class="modal-desc">"발주서 만들기"에서 업체와 품목을 고르면 <b>그 업체의 언어</b> 양식으로 메일 내용이 만들어져요. <b>{{품목목록}}</b> 자리에 고른 품목과 수량이 한 줄씩 들어가요. 아래 항목을 누르면 커서 위치에 들어가요.</p>
+      <div class="tabs template-lang-tabs" id="mtLangTabs" role="tablist"></div>
       <div class="placeholder-chips" id="placeholderHint"></div>
       <label class="field">제목
         <input id="mtSubject" class="input" type="text" />
@@ -165,7 +188,7 @@
 
   <!-- 업데이트 내용 · 가이드 -->
   <div id="guideOverlay" class="overlay" hidden>
-    <div class="modal modal-wide">
+    <div class="modal modal-wide modal-fixed">
       <button class="btn-close" data-close="guideOverlay" aria-label="닫기">×</button>
       <h3>업데이트 내용 · 가이드</h3>
       <div class="tabs guide-tabs" role="tablist">
@@ -176,12 +199,38 @@
       <div id="guideUpdates" class="guide-pane"></div>
 
       <div id="guideHowto" class="guide-pane" hidden>
+        <div class="manual-card">
+          <div class="manual-icon" aria-hidden="true">W</div>
+          <div class="manual-text">
+            <strong>자세한 사용 설명서 (Word)</strong>
+            <span>아래 가이드는 요약본이에요. 설명서에는 <b>화면 사진과 함께 모든 기능이 단계별로</b> 자세히 나와 있어요. 처음 쓰시거나 헷갈릴 때 받아서 보세요.</span>
+          </div>
+          <a class="btn-primary guide-download" href="/docs/아틀리에말리-사용설명서.docx" download>설명서 내려받기</a>
+        </div>
+        <p class="guide-summary-label">빠른 요약</p>
         <section class="guide-section">
           <h4>매일 이렇게 쓰세요</h4>
           <ol>
             <li>바탕화면 <b>'재고 발주 도우미'</b> 아이콘을 누르면 최신 버전으로 업데이트되고 화면이 열려요.</li>
             <li>첫 화면의 <b>발주 필요</b> 목록을 확인해요. 빨간색일수록 급한 품목이에요.</li>
-            <li>품목을 눌러 <b>발주 메일 작성</b>을 누르면 권장 수량이 채워진 메일이 열려요.</li>
+            <li><b>발주서 만들기</b>를 눌러 업체를 고르고, 보낼 품목과 수량을 확인해요.</li>
+            <li><b>메일 내용 만들기</b> → <b>네이버 메일 열기</b> → 받는 사람 · 제목 · 본문을 차례로 <b>복사</b>해서 붙여넣고 보내요.</li>
+          </ol>
+        </section>
+        <section class="guide-section">
+          <h4>처음 한 번: 업체 등록하기</h4>
+          <ol>
+            <li>상단 <b>업체 관리</b>에서 업체 이름과 이메일을 넣고 <b>업체 추가</b>.</li>
+            <li>'업체가 없는 품목'에서 품목을 체크하고 업체를 골라 <b>선택한 ○개 연결</b>. (라벨 지정과 같은 방법이에요)</li>
+            <li>품목 하나의 업체를 바꾸려면 목록에서 품목을 눌러 상세 화면에서 바꿔요.</li>
+          </ol>
+        </section>
+        <section class="guide-section">
+          <h4>해외 업체에 영어 · 중국어로 보내기</h4>
+          <ol>
+            <li><b>업체 관리</b>에서 그 업체의 언어를 <b>English</b> 또는 <b>中文</b>으로 고르고 <b>저장</b>.</li>
+            <li>품목 상세의 <b>업체용 품명</b>에 업체가 알아보는 이름이나 모델번호를 적어두면 발주서에 그 이름이 들어가요. (비워두면 한국어 품명)</li>
+            <li>발주서를 만들면 그 언어 양식으로 메일이 만들어져요. 문구는 <b>메일 양식</b>의 언어 탭에서 바꿀 수 있어요.</li>
           </ol>
         </section>
         <section class="guide-section">
@@ -210,7 +259,6 @@
             <li>팝업은 오른쪽 위 ×, 바깥 클릭, 또는 <b>Esc</b> 키로 닫을 수 있어요.</li>
           </ul>
         </section>
-        <a class="btn-outline guide-download" href="/docs/아틀리에말리-사용설명서.docx" download>전체 설명서 내려받기 (Word)</a>
       </div>
     </div>
   </div>

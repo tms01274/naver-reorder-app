@@ -23,12 +23,19 @@ function findChrome() {
 }
 
 // 앱을 임시 폴더에 복사하고 mockData 를 샘플 품목(sampleData.js)으로 바꿔 끼운 뒤 서버를 띄운다
-async function startSampleServer(port) {
+// seed: { "파일이름.json": 내용 } — 서버가 켜지기 전에 data 폴더에 넣어둘 파일 (예전 데이터 옮기기 테스트용)
+async function startSampleServer(port, { seed } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mali-sample-"));
   for (const item of ["server.js", "package.json", "src", "public", "docs"]) {
     fs.cpSync(path.join(ROOT, item), path.join(dir, item), { recursive: true, filter: (src) => !src.includes(`${path.sep}tools`) });
   }
   fs.copyFileSync(path.join(__dirname, "sampleData.js"), path.join(dir, "src", "mockData.js"));
+  if (seed) {
+    fs.mkdirSync(path.join(dir, "data"), { recursive: true });
+    for (const [name, content] of Object.entries(seed)) {
+      fs.writeFileSync(path.join(dir, "data", name), typeof content === "string" ? content : JSON.stringify(content, null, 2));
+    }
+  }
 
   const child = spawn(process.execPath, ["server.js"], {
     cwd: dir,

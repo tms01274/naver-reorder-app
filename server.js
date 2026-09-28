@@ -5,8 +5,9 @@ const fs = require("fs");
 const { execFile } = require("child_process");
 
 const { computeReorderList } = require("./src/reorderLogic");
-const { getAllSuppliers, upsertSupplier, clearLabelFromAll, setLabelForProducts } = require("./src/suppliers");
-const { getTemplate, saveTemplate, PLACEHOLDERS } = require("./src/mailTemplate");
+const { getAllSuppliers, upsertSupplier, clearFieldFromAll, setFieldForProducts, migrateSuppliers } = require("./src/suppliers");
+const { getAllVendors, createVendor, updateVendor, deleteVendor, migrateLegacySupplierFields } = require("./src/vendors");
+const { getTemplates, saveTemplate, getSenderNames, PLACEHOLDERS, LANGUAGES, LANG_CODES } = require("./src/mailTemplate");
 const { getAllLabels, createLabel, updateLabel, deleteLabel } = require("./src/inboundLabels");
 const { readSettings, saveSettings } = require("./src/settings");
 const { CHANGELOG } = require("./src/changelog");
@@ -19,6 +20,9 @@ if (MOCK_MODE) {
   console.log("⚠️  MOCK_MODE=true 로 실행 중입니다. 샘플 데이터로 동작합니다.");
   console.log("   실제 네이버 데이터를 쓰려면 .env 에서 MOCK_MODE=false 로 바꾸고 API 키를 넣어주세요.");
 }
+
+// 예전 버전의 품목별 업체명/이메일을 업체 목록으로 옮긴다 (한 번만 실제로 바뀜)
+migrateSuppliers(migrateLegacySupplierFields);
 
 const app = express();
 app.use(express.json());
@@ -93,6 +97,7 @@ app.get("/api/products", async (req, res) => {
       Promise.resolve(getAllSuppliers()),
     ]);
     const labels = getAllLabels();
+    const vendors = getAllVendors();
 
     const leadTimeOverrides = {};
     for (const [pid, info] of Object.entries(suppliers)) {
@@ -103,12 +108,15 @@ app.get("/api/products", async (req, res) => {
 
     const list = computeReorderList(products, orders, settings, leadTimeOverrides).map((p) => {
       const supplierInfo = suppliers[p.id] || null;
-      const labelId = supplierInfo?.labelId || null;
+      const labelId = supplierInfo?.labelId && labels[supplierInfo.labelId] ? supplierInfo.labelId : null;
+      const vendorId = supplierInfo?.vendorId && vendors[supplierInfo.vendorId] ? supplierInfo.vendorId : null;
       return {
         ...p,
         supplier: supplierInfo,
         labelId,
         label: labelId ? { id: labelId, ...labels[labelId] } : null,
+        vendorId,
+        vendor: vendorId ? { id: vendorId, ...vendors[vendorId] } : null,
       };
     });
 
@@ -117,6 +125,7 @@ app.get("/api/products", async (req, res) => {
       mockMode: MOCK_MODE,
       products: list,
       labels: Object.entries(labels).map(([id, l]) => ({ id, ...l })),
+      vendors: Object.entries(vendors).map(([id, v]) => ({ id, ...v })),
     });
   } catch (err) {
     console.error(err);
@@ -124,10 +133,11 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
-// 공급업체 정보 저장/수정
+// 품목별 정보 저장 (거래 업체, 입고유형 라벨, 품목만의 리드타임)
 app.post("/api/suppliers/:productId", (req, res) => {
   try {
-    const { supplierName, supplierEmail, leadTimeDays, labelId } = req.body;
+    const { vendorId, leadTimeDays, labelId, vendorItemName } = req.body;
+    if (vendorId && !getAllVendors()[vendorId]) return res.status(400).json({ error: "업체를 찾을 수 없어요." });
     let leadTimeUpdate = {};
     if (leadTimeDays !== undefined) {
       // 빈 값으로 저장하면 품목별 리드타임을 지워서 라벨 리드타임을 쓰게 한다
@@ -139,8 +149,10 @@ app.post("/api/suppliers/:productId", (req, res) => {
       }
     }
     const saved = upsertSupplier(req.params.productId, {
-      ...(supplierName !== undefined ? { supplierName } : {}),
-      ...(supplierEmail !== undefined ? { supplierEmail } : {}),
+      // 빈 값이면 업체 연결을 끊는다
+      ...(vendorId !== undefined ? { vendorId: vendorId || undefined } : {}),
+      // 해외 업체 발주서에 쓸 품명 (빈 값이면 지워서 원래 품명 사용)
+      ...(vendorItemName !== undefined ? { vendorItemName: String(vendorItemName).trim() || undefined } : {}),
       ...leadTimeUpdate,
       ...(labelId !== undefined ? { labelId } : {}),
     });
@@ -194,17 +206,87 @@ app.post("/api/labels/assign", (req, res) => {
   if (!Array.isArray(productIds) || !productIds.length) {
     return res.status(400).json({ error: "라벨을 지정할 품목을 선택해주세요." });
   }
-  if (!labelId || !getAllLabels()[labelId]) {
+  // 빈 값이면 라벨 해제
+  if (labelId !== "" && (!labelId || !getAllLabels()[labelId])) {
     return res.status(400).json({ error: "지정할 라벨을 찾을 수 없어요." });
   }
-  setLabelForProducts(productIds.map(String), labelId);
+  setFieldForProducts(productIds.map(String), "labelId", labelId || undefined);
   res.json({ ok: true, count: productIds.length });
 });
 
 // 입고유형 라벨 삭제 (지정돼 있던 품목은 라벨 없음 상태로 돌아감)
 app.delete("/api/labels/:id", (req, res) => {
   deleteLabel(req.params.id);
-  clearLabelFromAll(req.params.id);
+  clearFieldFromAll("labelId", req.params.id);
+  res.json({ ok: true });
+});
+
+// ── 거래 업체 ──────────────────────────────────────────
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// 이름은 필수, 이메일은 비워둘 수 있지만 쓰면 형식을 확인한다
+function readVendorInput(body, { partial }) {
+  const out = {};
+  if (body.name !== undefined || !partial) {
+    const name = String(body.name ?? "").trim();
+    if (!name) throw new Error("업체 이름을 입력해주세요.");
+    out.name = name;
+  }
+  if (body.email !== undefined || !partial) {
+    const email = String(body.email ?? "").trim();
+    if (email && !EMAIL_RE.test(email)) throw new Error("이메일 주소 형식을 확인해주세요.");
+    out.email = email;
+  }
+  // 발주서 언어 (기본 한국어)
+  if (body.lang !== undefined || !partial) {
+    const lang = body.lang || "ko";
+    if (!LANG_CODES.includes(lang)) throw new Error("발주서 언어를 다시 골라주세요.");
+    out.lang = lang;
+  }
+  return out;
+}
+
+app.get("/api/vendors", (req, res) => {
+  res.json(Object.entries(getAllVendors()).map(([id, v]) => ({ id, ...v })));
+});
+
+app.post("/api/vendors", (req, res) => {
+  try {
+    res.json(createVendor(readVendorInput(req.body, { partial: false })));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/vendors/:id", (req, res) => {
+  try {
+    const saved = updateVendor(req.params.id, readVendorInput(req.body, { partial: true }));
+    if (!saved) return res.status(404).json({ error: "업체를 찾을 수 없어요." });
+    res.json(saved);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 여러 품목을 한 번에 업체에 연결
+app.post("/api/vendors/assign", (req, res) => {
+  const { productIds, vendorId } = req.body;
+  if (!Array.isArray(productIds) || !productIds.length) {
+    return res.status(400).json({ error: "업체를 지정할 품목을 선택해주세요." });
+  }
+  // 빈 값이면 업체 연결 해제
+  if (vendorId !== "" && (!vendorId || !getAllVendors()[vendorId])) {
+    return res.status(400).json({ error: "지정할 업체를 찾을 수 없어요." });
+  }
+  setFieldForProducts(productIds.map(String), "vendorId", vendorId || undefined);
+  res.json({ ok: true, count: productIds.length });
+});
+
+// 업체 삭제 (연결돼 있던 품목은 업체 없음 상태로 돌아감)
+app.delete("/api/vendors/:id", (req, res) => {
+  deleteVendor(req.params.id);
+  clearFieldFromAll("vendorId", req.params.id);
   res.json({ ok: true });
 });
 
@@ -227,17 +309,16 @@ app.post("/api/whats-new/seen", (req, res) => {
 
 // 발주 메일 양식 조회
 app.get("/api/mail-template", (req, res) => {
-  res.json({ template: getTemplate(), placeholders: PLACEHOLDERS });
+  res.json({ templates: getTemplates(), languages: LANGUAGES, placeholders: PLACEHOLDERS, senderNames: getSenderNames() });
 });
 
-// 발주 메일 양식 저장
+// 발주 메일 양식 저장 (언어별)
 app.post("/api/mail-template", (req, res) => {
   try {
-    const { subject, body } = req.body;
-    const saved = saveTemplate({ subject, body });
-    res.json(saved);
+    const { lang = "ko", subject, body } = req.body;
+    res.json(saveTemplate(lang, { subject, body }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 

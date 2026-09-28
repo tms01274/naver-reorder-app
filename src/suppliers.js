@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 
+// 품목별 정보 (파일 이름은 예전 그대로 suppliers.json)
 const FILE_PATH = path.join(__dirname, "..", "data", "suppliers.json");
 
 function readAll() {
@@ -17,7 +18,7 @@ function writeAll(data) {
   fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
-// data 구조: { [productId]: { supplierName, supplierEmail, leadTimeDays? } }
+// data 구조: { [productId]: { vendorId?, labelId?, leadTimeDays? } }
 
 function getSupplier(productId) {
   const all = readAll();
@@ -35,21 +36,28 @@ function upsertSupplier(productId, info) {
   return all[productId];
 }
 
-function clearLabelFromAll(labelId) {
+// 삭제된 라벨/업체를 가리키던 품목에서 그 값을 지운다 (field: "labelId" | "vendorId")
+function clearFieldFromAll(field, value) {
   const all = readAll();
   for (const info of Object.values(all)) {
-    if (info.labelId === labelId) delete info.labelId;
+    if (info[field] === value) delete info[field];
   }
   writeAll(all);
 }
 
-// 여러 품목의 라벨을 한 번에 지정 (파일을 한 번만 읽고 쓴다)
-function setLabelForProducts(productIds, labelId) {
+// 여러 품목에 라벨/업체를 한 번에 지정 (파일을 한 번만 읽고 쓴다)
+function setFieldForProducts(productIds, field, value) {
   const all = readAll();
   for (const id of productIds) {
-    all[id] = { ...(all[id] || {}), labelId };
+    all[id] = { ...(all[id] || {}), [field]: value };
   }
   writeAll(all);
 }
 
-module.exports = { getSupplier, getAllSuppliers, upsertSupplier, clearLabelFromAll, setLabelForProducts };
+// 저장된 품목 정보를 한 번에 고쳐 쓰는 용도 (예전 형식 옮기기). fn 이 true 를 돌려주면 저장
+function migrateSuppliers(fn) {
+  const all = readAll();
+  if (fn(all)) writeAll(all);
+}
+
+module.exports = { getSupplier, getAllSuppliers, upsertSupplier, clearFieldFromAll, setFieldForProducts, migrateSuppliers };

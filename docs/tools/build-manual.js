@@ -36,7 +36,10 @@ async function captureScreens(url) {
   const cn = await post("/api/labels", { name: "중국수입", leadTimeDays: 20 });
   await post("/api/labels/assign", { productIds: ["2001", "2002", "2003", "2004", "2006", "2013", "2016", "2018"], labelId: cn.id });
   await post("/api/labels/assign", { productIds: ["2005", "2007", "2008", "2011", "2014", "2015"], labelId: kr.id });
-  await post("/api/suppliers/2003", { supplierName: "글라스월드", supplierEmail: "order@glassworld.co.kr" });
+  const gw = await post("/api/vendors", { name: "글라스월드", email: "order@glassworld.co.kr" });
+  const ac = await post("/api/vendors", { name: "아크릴나라", email: "sales@acryl.kr" });
+  await post("/api/vendors/assign", { productIds: ["2001", "2002", "2003", "2006", "2007", "2008", "2013", "2016", "2018"], vendorId: gw.id });
+  await post("/api/vendors/assign", { productIds: ["2004", "2015", "2017"], vendorId: ac.id });
   await p.goto(url, { waitUntil: "networkidle0" });
   await wait(600);
   await p.mouse.move(0, 0);
@@ -67,9 +70,11 @@ async function captureScreens(url) {
 
   await p.click("#openLabelManager");
   await wait(200);
-  await p.click(".unlabeled-row");
-  await p.click(".unlabeled-row:nth-child(2)");
-  await p.select("#bulkLabelSelect", kr.id);
+  await p.click('#labelManagerBody [data-mgr-tab="assign"]');
+  await wait(150);
+  await p.click("#labelManagerBody .assign-row");
+  await p.click("#labelManagerBody .assign-row:nth-child(2)");
+  await p.select("#labelAssignTarget", kr.id);
   await shot("04-labels");
   await closeAll();
 
@@ -84,6 +89,31 @@ async function captureScreens(url) {
 
   await p.click(".product-row");
   await shot("03-detail");
+  await closeAll();
+
+  await p.click("#openOrderBtn");
+  await wait(200);
+  await p.click(`[data-order-vendor="${gw.id}"]`);
+  await shot("08-order");
+  await p.click("#orderToMail");
+  await wait(200);
+  // 메일 화면은 세로로 길어서 캡처할 때만 창을 키워 한 번에 담는다
+  await p.setViewport({ width: 1280, height: 1250, deviceScaleFactor: 1.5 });
+  await wait(200);
+  await p.click('[data-copy="orderTo"]');
+  await shot("09-mail");
+  await p.setViewport({ width: 1280, height: 820, deviceScaleFactor: 1.5 });
+  await closeAll();
+
+  await p.click("#openVendorManager");
+  await wait(200);
+  await p.click('#vendorManagerBody [data-mgr-tab="assign"]');
+  await wait(150);
+  await p.click("#vendorManagerBody .assign-row");
+  await p.select("#vendorAssignTarget", ac.id);
+  await shot("10-vendors");
+  await p.click('#vendorManagerBody [data-mgr-tab="list"]');
+  await shot("11-vendor-list");
   await closeAll();
   await p.click("#openSettings");
   await shot("05-settings");

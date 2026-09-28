@@ -384,9 +384,45 @@ textarea.input { resize: vertical; line-height: 1.6; }
 
 /* 라벨 관리 */
 .label-list { display: flex; flex-direction: column; gap: 8px; }
+/* 탭이 있는 팝업(라벨·업체 관리, 가이드)은 높이를 고정하고, 탭 내용만 안에서 스크롤 */
+.modal-fixed {
+  height: min(760px, 88vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-fixed > #labelManagerBody,
+.modal-fixed > #vendorManagerBody { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.manager-pane,
+.modal-fixed > .guide-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -28px -28px;
+  padding: 2px 28px 28px;
+}
+.manager-pane .bulk-bar { top: 0; }
+.modal-fixed h3, .modal-fixed .modal-desc, .modal-fixed .tabs { flex-shrink: 0; }
+.modal-fixed .guide-tabs { align-self: flex-start; }
+.manager-tabs { display: inline-flex; align-self: flex-start; margin: 4px 0 18px; }
+.manager-tabs .dot-badge { min-width: 18px; height: 18px; font-size: 0.68rem; }
+.list-search { width: 100%; margin: 12px 0 8px; }
+.label-list { margin-top: 10px; }
+.assign-row .name { flex: 1; min-width: 0; }
+.bulk-actions {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  flex-wrap: wrap;
+}
+.assign-current { flex-shrink: 0; }
 .label-edit-row {
   display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) 150px auto;
+  grid-template-columns: 12px minmax(0, 1fr) 130px auto auto;
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
@@ -449,6 +485,120 @@ textarea.input { resize: vertical; line-height: 1.6; }
 }
 .placeholder-chips button:hover { border-color: var(--ink-2); }
 .placeholder-chips code { font-family: inherit; font-weight: 700; }
+
+/* ── 업체 · 발주서 ──────────────────────── */
+.page-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.vendor-chip {
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+.vendor-chip::before { content: "· "; }
+.vendor-chip.other { color: var(--warn); }
+.vendor-chip.other::before { content: ""; }
+.select-with-action { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.select-with-action .input { width: 100%; margin-top: 0; }
+.muted { color: var(--muted); }
+.small { font-size: 0.8rem; }
+.nowrap { white-space: nowrap; }
+.spacer { flex: 1; }
+.warn-box { background: var(--warn-soft); color: #7a5211; border-radius: 12px; padding: 10px 14px; font-size: 0.86rem; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.lang-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+  vertical-align: middle;
+}
+.vendor-item-name { font-size: 0.74rem; color: var(--brand); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.template-lang-tabs { display: inline-flex; margin-bottom: 14px; }
+.vendor-edit-row select.input { padding: 7px 28px 7px 10px; }
+.vendor-edit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.vendor-edit-row .input { padding: 7px 10px; }
+.vendor-edit-row.new { background: var(--surface); border-style: dashed; }
+
+.vendor-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.vendor-card {
+  text-align: left;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--ink);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.vendor-card:hover { border-color: var(--ink-2); }
+.vendor-card.active { border-color: var(--ink); box-shadow: 0 0 0 3px #e9e9e6; }
+.vendor-name { font-weight: 700; font-size: 0.92rem; }
+.vendor-meta { font-size: 0.78rem; color: var(--muted); }
+.vendor-meta b { color: var(--danger); }
+
+.order-table { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.order-head, .order-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 64px 120px 110px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+}
+.order-head { background: var(--surface-2); font-size: 0.74rem; font-weight: 600; color: var(--faint); border-bottom: 1px solid var(--line); }
+.order-row { border-bottom: 1px solid var(--line); font-size: 0.88rem; cursor: pointer; }
+.order-row:last-child { border-bottom: none; }
+.order-row:hover { background: #fafaf8; }
+.order-row.checked { background: var(--brand-soft); }
+.order-row input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--ink); cursor: pointer; }
+.order-name { display: flex; flex-direction: column; min-width: 0; }
+.order-name .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.order-qty { width: 70px; padding: 6px 8px; text-align: right; margin-right: 4px; }
+.order-add { position: relative; margin-top: 10px; }
+.order-add-results { display: flex; flex-direction: column; margin-top: 6px; border-radius: 12px; overflow: hidden; }
+.order-add-results:not(:empty) { border: 1px solid var(--line); }
+.order-add-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  padding: 9px 14px;
+  text-align: left;
+  font-size: 0.86rem;
+  cursor: pointer;
+  color: var(--ink);
+}
+.order-add-item:last-child { border-bottom: none; }
+.order-add-item:hover { background: var(--brand-soft); }
+.order-add-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.order-add-empty { padding: 9px 14px; font-size: 0.84rem; }
+.order-footer { display: flex; align-items: center; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.order-footer .order-summary { flex: 1; color: var(--ink-2); font-size: 0.9rem; }
+.order-footer a.btn-primary { text-decoration: none; }
+
+.mail-steps { margin: 8px 0 18px; padding-left: 20px; color: var(--ink-2); font-size: 0.88rem; line-height: 1.8; background: var(--surface-2); border-radius: 12px; padding: 12px 14px 12px 32px; }
+.mail-field { margin-bottom: 14px; }
+.mail-field-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 0.84rem; font-weight: 700; color: var(--ink-2); }
+.btn-outline.copied { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
 
 /* ── 업데이트 내용 · 가이드 ─────────────── */
 .guide-btn .new-dot, .guide-btn .new-badge { display: none; }
@@ -517,6 +667,33 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .guide-legend { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; align-items: center; font-size: 0.88rem; color: var(--ink-2); }
 .guide-legend .status { justify-self: start; }
 .guide-download { text-decoration: none; }
+.manual-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  margin-bottom: 22px;
+  border-radius: 14px;
+  background: linear-gradient(100deg, #eef1fe, #f4efff);
+  border: 1px solid #d9dffd;
+  flex-wrap: wrap;
+}
+.manual-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: #2b579a;
+  color: #fff;
+  font-weight: 800;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.manual-text { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 3px; font-size: 0.86rem; color: var(--ink-2); line-height: 1.55; }
+.manual-text strong { font-size: 0.98rem; color: var(--ink); }
+.guide-summary-label { font-size: 0.78rem; font-weight: 700; color: var(--faint); letter-spacing: 0.02em; margin: 0 0 10px; }
 
 /* ── 토스트 ─────────────────────────────── */
 .toast-host {
@@ -563,6 +740,10 @@ textarea.input { resize: vertical; line-height: 1.6; }
   .form-grid .span-2 { grid-column: auto; }
   .label-edit-row { grid-template-columns: 12px 1fr; }
   .label-edit-row > :nth-child(n + 3) { grid-column: 2; }
+  .vendor-edit-row { grid-template-columns: 1fr; }
+  .order-head { display: none; }
+  .order-row { grid-template-columns: 24px 1fr auto; }
+  .order-row > :nth-child(3), .order-row > :nth-child(4) { display: none; }
 }
 @media (max-width: 520px) {
   .page { padding: 20px 16px 48px; }
