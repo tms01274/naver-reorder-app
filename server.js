@@ -1,9 +1,11 @@
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
+const { execFile } = require("child_process");
 
 const { computeReorderList } = require("./src/reorderLogic");
-const { getAllSuppliers, upsertSupplier, clearLabelFromAll } = require("./src/suppliers");
+const { getAllSuppliers, upsertSupplier, clearLabelFromAll, setLabelForProducts } = require("./src/suppliers");
 const { getTemplate, saveTemplate, PLACEHOLDERS } = require("./src/mailTemplate");
 const { getAllLabels, createLabel, updateLabel, deleteLabel } = require("./src/inboundLabels");
 const { readSettings, saveSettings } = require("./src/settings");
@@ -64,16 +66,22 @@ function getSettings(query = {}) {
   }
   const saved = readSettings();
 
+  // 예전 버전에서 빈 칸이 0으로 저장된 경우가 있어, 저장값도 검사해서 이상하면 기본값을 쓴다
   return {
-    lookbackDays: Number(saved.lookbackDays ?? process.env.SALES_LOOKBACK_DAYS ?? 14),
+    lookbackDays: parseDays(saved.lookbackDays, 1) ?? Number(process.env.SALES_LOOKBACK_DAYS ?? 14),
     leadTimeDays: Number(process.env.DEFAULT_LEAD_TIME_DAYS ?? 7),
-    bufferDays: Number(saved.bufferDays ?? process.env.DEFAULT_SAFETY_BUFFER_DAYS ?? 3),
+    bufferDays: parseDays(saved.bufferDays, 0) ?? Number(process.env.DEFAULT_SAFETY_BUFFER_DAYS ?? 3),
   };
 }
 
 // 재주문 필요 품목 리스트 (+ 전체 품목)
 app.get("/api/products", async (req, res) => {
   try {
+    // 화면의 "새로고침" 버튼은 캐시를 무시하고 네이버에서 새로 받아온다
+    if (req.query.fresh) {
+      productsCache = { data: null, expiresAt: 0 };
+      ordersCacheByDays.clear();
+    }
     const settings = getSettings(req.query);
     const [products, orders, suppliers] = await Promise.all([
       getCachedProducts(),
@@ -176,6 +184,19 @@ app.put("/api/labels/:id", (req, res) => {
   }
 });
 
+// 여러 품목에 한 번에 라벨 지정
+app.post("/api/labels/assign", (req, res) => {
+  const { productIds, labelId } = req.body;
+  if (!Array.isArray(productIds) || !productIds.length) {
+    return res.status(400).json({ error: "라벨을 지정할 품목을 선택해주세요." });
+  }
+  if (!labelId || !getAllLabels()[labelId]) {
+    return res.status(400).json({ error: "지정할 라벨을 찾을 수 없어요." });
+  }
+  setLabelForProducts(productIds.map(String), labelId);
+  res.json({ ok: true, count: productIds.length });
+});
+
 // 입고유형 라벨 삭제 (지정돼 있던 품목은 라벨 없음 상태로 돌아감)
 app.delete("/api/labels/:id", (req, res) => {
   deleteLabel(req.params.id);
@@ -202,4 +223,15 @@ app.post("/api/mail-template", (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n재고 발주 도우미가 실행됐어요: http://localhost:${PORT}\n`);
+  ensureDesktopShortcut();
 });
+
+// 이미 설치된 PC도 업데이트만 받으면 바탕화면 아이콘이 새 "원클릭" 아이콘으로 바뀌도록,
+// git 으로 설치된 Windows PC 에서 서버가 켜질 때마다 아이콘을 만들어 둔다 (여러 번 해도 안전)
+function ensureDesktopShortcut() {
+  if (process.platform !== "win32" || !fs.existsSync(path.join(__dirname, ".git"))) return;
+  const script = path.join(__dirname, "windows-autostart", "create-shortcut.ps1");
+  execFile("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], (err) => {
+    if (err) console.error("바탕화면 아이콘 만들기 실패:", err.message);
+  });
+}

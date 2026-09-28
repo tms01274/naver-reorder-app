@@ -3,84 +3,153 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>재고 발주 도우미</title>
+<title>아틀리에 말리 · 재고 발주</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <h1>재고 발주 도우미</h1>
-      <div class="mock-badge" id="mockBadge" hidden>샘플 데이터 모드</div>
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1" y="1" width="14" height="14" rx="4" fill="#5b7cfa" />
+          <rect x="17" y="1" width="14" height="14" rx="4" fill="#f59f67" />
+          <rect x="1" y="17" width="14" height="14" rx="4" fill="#4cc3a0" />
+          <rect x="17" y="17" width="14" height="14" rx="4" fill="#f2c94c" />
+        </svg>
+        <div>
+          <div class="brand-name">아틀리에 말리</div>
+          <div class="brand-sub">재고 · 발주 관리</div>
+        </div>
+        <span class="mock-badge" id="mockBadge" hidden>샘플 데이터</span>
+      </div>
+      <nav class="top-actions">
+        <button id="openLabelManager" class="btn-ghost">
+          라벨 관리 <span id="labelCountBadge" class="dot-badge" hidden></span>
+        </button>
+        <button id="openMailTemplate" class="btn-ghost">메일 양식</button>
+        <button id="openSettings" class="btn-ghost">판단 기준</button>
+      </nav>
     </div>
   </header>
 
-  <main class="layout">
-    <section class="panel settings-panel">
-      <h2>판단 기준</h2>
-      <label>
-        판매 속도 계산 기간
-        <div class="input-row"><input type="number" id="lookbackDays" min="1" /> <span>일</span></div>
-      </label>
-      <label>
-        안전 여유일수
-        <div class="input-row"><input type="number" id="bufferDays" min="0" /> <span>일</span></div>
-      </label>
-      <button id="applySettings" class="btn-secondary">적용</button>
-
-      <button id="openLabelManager" class="btn-secondary label-manager-btn">
-        입고유형 라벨 관리 <span id="labelCountBadge" class="count-badge" hidden></span>
-      </button>
-
-      <details class="mail-template-panel">
-        <summary>발주 메일 양식 관리</summary>
-        <label>제목
-          <input id="mtSubject" type="text" />
-        </label>
-        <label>본문
-          <textarea id="mtBody" rows="8"></textarea>
-        </label>
-        <div class="placeholder-hint" id="placeholderHint"></div>
-        <div class="form-actions">
-          <button id="saveTemplate" class="btn-secondary" style="width:auto;">양식 저장</button>
-          <span id="templateSavedNote" class="saved-note" hidden>저장됨</span>
-        </div>
-      </details>
+  <main class="page">
+    <section class="page-head">
+      <div>
+        <h1>오늘의 발주</h1>
+        <p class="page-sub" id="criteriaText">데이터를 불러오는 중이에요</p>
+      </div>
+      <button id="refreshBtn" class="btn-outline">새로고침</button>
     </section>
 
-    <section class="panel list-panel">
-      <div class="list-header">
-        <h2>지금 발주가 필요한 품목</h2>
-        <span id="reorderCount" class="count-badge">–</span>
-        <select id="labelFilter" class="label-filter">
-          <option value="all">전체</option>
-        </select>
+    <section class="stats">
+      <button class="stat stat-danger" data-tab="reorder">
+        <span class="stat-label">지금 발주 필요</span>
+        <span class="stat-value" id="statReorder">–</span>
+      </button>
+      <button class="stat stat-warn" data-tab="soon">
+        <span class="stat-label">곧 발주 필요</span>
+        <span class="stat-value" id="statSoon">–</span>
+      </button>
+      <button class="stat" data-tab="all">
+        <span class="stat-label">전체 품목</span>
+        <span class="stat-value" id="statAll">–</span>
+      </button>
+      <button class="stat" id="statUnlabeledCard">
+        <span class="stat-label">라벨 미지정</span>
+        <span class="stat-value" id="statUnlabeled">–</span>
+      </button>
+    </section>
+
+    <section class="card list-card">
+      <div class="toolbar">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="reorder">발주 필요 <span class="tab-count" id="tabCountReorder">0</span></button>
+          <button class="tab" data-tab="soon">곧 필요 <span class="tab-count" id="tabCountSoon">0</span></button>
+          <button class="tab" data-tab="all">전체 <span class="tab-count" id="tabCountAll">0</span></button>
+        </div>
+        <div class="toolbar-right">
+          <input id="searchInput" class="input search" type="search" placeholder="품목 검색" />
+          <select id="labelFilter" class="input">
+            <option value="all">모든 라벨</option>
+          </select>
+        </div>
       </div>
+
+      <div class="table-head">
+        <span>품목</span>
+        <span class="num">재고</span>
+        <span class="num">일평균 판매</span>
+        <span>남은 기간</span>
+        <span class="num">권장 발주</span>
+      </div>
+      <div id="productList" class="product-list">
+        <div class="empty-note">불러오는 중…</div>
+      </div>
+
       <div id="listLoadingOverlay" class="list-loading-overlay" hidden>
         <div class="spinner"></div>
         <span>네이버에서 최신 데이터를 불러오는 중…</span>
       </div>
-      <div id="reorderList" class="reorder-list">불러오는 중…</div>
-
-      <details class="all-products">
-        <summary>전체 품목 보기</summary>
-        <div id="allList" class="reorder-list"></div>
-      </details>
     </section>
   </main>
 
+  <!-- 품목 상세 -->
   <div id="detailOverlay" class="overlay" hidden>
-    <div class="detail-card">
-      <button id="closeDetail" class="btn-close" aria-label="닫기">×</button>
+    <div class="modal">
+      <button class="btn-close" data-close="detailOverlay" aria-label="닫기">×</button>
       <div id="detailBody"></div>
     </div>
   </div>
 
+  <!-- 라벨 관리 -->
   <div id="labelOverlay" class="overlay" hidden>
-    <div class="detail-card label-manager-card">
-      <button id="closeLabelManager" class="btn-close" aria-label="닫기">×</button>
+    <div class="modal modal-wide">
+      <button class="btn-close" id="closeLabelManager" data-close="labelOverlay" aria-label="닫기">×</button>
       <div id="labelManagerBody"></div>
     </div>
   </div>
+
+  <!-- 판단 기준 -->
+  <div id="settingsOverlay" class="overlay" hidden>
+    <div class="modal modal-narrow">
+      <button class="btn-close" data-close="settingsOverlay" aria-label="닫기">×</button>
+      <h3>판단 기준</h3>
+      <p class="modal-desc">최근 판매 속도로 재고가 며칠 버틸지 계산하고, 입고까지 걸리는 기간(라벨의 리드타임)보다 짧으면 발주 필요로 표시해요.</p>
+      <label class="field">판매 속도 계산 기간
+        <div class="input-suffix"><input class="input" type="number" id="lookbackDays" min="1" /><span>일</span></div>
+        <small>최근 며칠간의 판매량으로 하루 평균 판매량을 계산할지</small>
+      </label>
+      <label class="field">안전 여유일수
+        <div class="input-suffix"><input class="input" type="number" id="bufferDays" min="0" /><span>일</span></div>
+        <small>권장 발주 수량을 계산할 때 리드타임에 더해 확보할 여유분</small>
+      </label>
+      <div class="modal-actions">
+        <button id="applySettings" class="btn-primary">적용</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 발주 메일 양식 -->
+  <div id="mailOverlay" class="overlay" hidden>
+    <div class="modal">
+      <button class="btn-close" data-close="mailOverlay" aria-label="닫기">×</button>
+      <h3>발주 메일 양식</h3>
+      <p class="modal-desc">품목 상세에서 "발주 메일 작성"을 누르면 이 양식으로 메일이 채워져요. 아래 항목을 누르면 커서 위치에 들어가요.</p>
+      <div class="placeholder-chips" id="placeholderHint"></div>
+      <label class="field">제목
+        <input id="mtSubject" class="input" type="text" />
+      </label>
+      <label class="field">본문
+        <textarea id="mtBody" class="input" rows="9"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button id="saveTemplate" class="btn-primary">양식 저장</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastHost" class="toast-host" aria-live="polite"></div>
 
   <script src="app.js"></script>
 </body>

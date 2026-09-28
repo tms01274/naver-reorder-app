@@ -43,4 +43,13 @@ function clearLabelFromAll(labelId) {
   writeAll(all);
 }
 
-module.exports = { getSupplier, getAllSuppliers, upsertSupplier, clearLabelFromAll };
+// 여러 품목의 라벨을 한 번에 지정 (파일을 한 번만 읽고 쓴다)
+function setLabelForProducts(productIds, labelId) {
+  const all = readAll();
+  for (const id of productIds) {
+    all[id] = { ...(all[id] || {}), labelId };
+  }
+  writeAll(all);
+}
+
+module.exports = { getSupplier, getAllSuppliers, upsertSupplier, clearLabelFromAll, setLabelForProducts };
