@@ -75,9 +75,19 @@ if (-not (Test-Path (Join-Path $AppDir "node_modules"))) {
   npm.cmd install --no-audit --no-fund | Out-Null
 }
 
-# ── 2. 서버 켜기 (업데이트됐으면 재시작) ─────────────────
+# ── 2. 서버 켜기 (업데이트됐거나 설정이 바뀌었으면 재시작) ──
 $serverPid = Get-ServerPid
-if ($serverPid -and $updated) {
+$envChanged = $false
+$envFile = Join-Path $AppDir ".env"
+if ($serverPid -and (Test-Path $envFile)) {
+  # .env(네이버 API 키 등)를 서버가 켜진 뒤에 고쳤으면 재시작해야 반영된다
+  $proc = Get-Process -Id $serverPid -ErrorAction SilentlyContinue
+  if ($proc -and (Get-Item $envFile).LastWriteTime -gt $proc.StartTime) {
+    $envChanged = $true
+    Write-Log "설정(.env) 변경 감지 - 서버 재시작"
+  }
+}
+if ($serverPid -and ($updated -or $envChanged)) {
   Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 1
   $serverPid = $null
