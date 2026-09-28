@@ -9,6 +9,8 @@ const { getAllSuppliers, upsertSupplier, clearLabelFromAll, setLabelForProducts 
 const { getTemplate, saveTemplate, PLACEHOLDERS } = require("./src/mailTemplate");
 const { getAllLabels, createLabel, updateLabel, deleteLabel } = require("./src/inboundLabels");
 const { readSettings, saveSettings } = require("./src/settings");
+const { CHANGELOG } = require("./src/changelog");
+const { readUiState, saveUiState } = require("./src/uiState");
 
 const MOCK_MODE = String(process.env.MOCK_MODE || "true").toLowerCase() !== "false";
 const naverClient = MOCK_MODE ? require("./src/mockData") : require("./src/naverClient");
@@ -21,6 +23,8 @@ if (MOCK_MODE) {
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+// 사용 설명서(Word) 내려받기용
+app.use("/docs", express.static(path.join(__dirname, "docs")));
 
 // 네이버 API(상품/주문)는 호출당 시간이 꽤 걸리므로, 짧게 캐시해서
 // 라벨 저장/삭제처럼 화면을 다시 그릴 때마다 매번 다시 부르지 않게 합니다.
@@ -202,6 +206,23 @@ app.delete("/api/labels/:id", (req, res) => {
   deleteLabel(req.params.id);
   clearLabelFromAll(req.params.id);
   res.json({ ok: true });
+});
+
+// 업데이트 기록 + 사용자가 마지막으로 확인한 기록
+app.get("/api/whats-new", (req, res) => {
+  const latestId = CHANGELOG[0]?.id ?? null;
+  const lastSeenId = readUiState().lastSeenChangelogId ?? null;
+  const seenIndex = CHANGELOG.findIndex((e) => e.id === lastSeenId);
+  // 확인한 적이 없으면 전부 새 소식, 확인했으면 그보다 위(최신)에 있는 항목만 새 소식
+  const newIds = (seenIndex === -1 ? CHANGELOG : CHANGELOG.slice(0, seenIndex)).map((e) => e.id);
+  res.json({ entries: CHANGELOG, latestId, lastSeenId, newIds, hasNew: newIds.length > 0 });
+});
+
+// 업데이트 기록을 확인했음을 저장 (가이드 버튼 강조 해제)
+app.post("/api/whats-new/seen", (req, res) => {
+  const latestId = CHANGELOG[0]?.id ?? null;
+  saveUiState({ lastSeenChangelogId: latestId });
+  res.json({ ok: true, lastSeenId: latestId });
 });
 
 // 발주 메일 양식 조회

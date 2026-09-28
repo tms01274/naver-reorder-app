@@ -450,6 +450,74 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .placeholder-chips button:hover { border-color: var(--ink-2); }
 .placeholder-chips code { font-family: inherit; font-weight: 700; }
 
+/* ── 업데이트 내용 · 가이드 ─────────────── */
+.guide-btn .new-dot, .guide-btn .new-badge { display: none; }
+.guide-btn.has-new {
+  background: var(--brand);
+  color: #fff;
+  box-shadow: 0 0 0 4px var(--brand-soft);
+}
+.guide-btn.has-new:hover { background: #3f5ae6; }
+.guide-btn.has-new .new-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.guide-btn.has-new .new-badge {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  background: #fff;
+  color: var(--brand);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.7); } }
+
+.whats-new-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+  border-radius: var(--radius);
+  background: linear-gradient(100deg, #eef1fe, #f4efff);
+  border: 1px solid #d9dffd;
+  animation: pop-in 0.25s ease-out;
+}
+.banner-icon { font-size: 1.2rem; color: var(--brand); }
+.banner-text { flex: 1; display: flex; flex-direction: column; font-size: 0.88rem; color: var(--ink-2); }
+.banner-text strong { color: var(--ink); font-size: 0.95rem; }
+.whats-new-banner .btn-primary { background: var(--brand); }
+.whats-new-banner .btn-primary:hover { background: #3f5ae6; }
+
+.guide-tabs { display: inline-flex; margin: 16px 0 20px; }
+.changelog-entry { border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin-bottom: 12px; }
+.changelog-entry.is-new { border-color: #c9d2fc; background: #f8f9ff; }
+.changelog-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.changelog-head h4 { margin: 0; font-size: 1rem; }
+.changelog-date { font-size: 0.8rem; color: var(--faint); }
+.changelog-entry .new-badge {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  background: var(--brand);
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+.changelog-entry ul, .guide-section ol, .guide-section ul { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 0.9rem; line-height: 1.7; }
+.guide-section { margin-bottom: 22px; }
+.guide-section h4 { margin: 0 0 8px; }
+.guide-section p { font-size: 0.88rem; color: var(--ink-2); margin: 10px 0 0; }
+.guide-legend { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; align-items: center; font-size: 0.88rem; color: var(--ink-2); }
+.guide-legend .status { justify-self: start; }
+.guide-download { text-decoration: none; }
+
 /* ── 토스트 ─────────────────────────────── */
 .toast-host {
   position: fixed;

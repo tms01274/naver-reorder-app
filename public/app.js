@@ -210,7 +210,7 @@ function renderList() {
   $("tabCountSoon").textContent = byTab.soon.length;
   $("tabCountAll").textContent = byTab.all.length;
 
-  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === activeTab));
+  document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === activeTab));
 
   const list = sortByUrgency(byTab[activeTab]);
   const emptyText = {
@@ -636,7 +636,71 @@ async function bulkAssignLabel() {
   await refreshAfterLabelChange();
 }
 
+// ── 업데이트 내용 · 가이드 ──────────────────────────
+
+let whatsNew = null;
+
+async function loadWhatsNew() {
+  whatsNew = await fetchJson("/api/whats-new");
+  renderWhatsNewIndicators();
+}
+
+// 새 소식이 있으면 가이드 버튼을 강조하고 안내 띠를 보여준다
+function renderWhatsNewIndicators() {
+  const hasNew = !!whatsNew?.hasNew;
+  $("openGuide").classList.toggle("has-new", hasNew);
+  $("guideBtnText").textContent = hasNew ? "새 업데이트" : "가이드";
+  $("whatsNewBanner").hidden = !hasNew;
+  if (hasNew) $("whatsNewBannerTitle").textContent = whatsNew.entries[0].title;
+}
+
+function renderGuideUpdates() {
+  const newIds = new Set(whatsNew?.newIds || []);
+  $("guideUpdates").innerHTML = (whatsNew?.entries || [])
+    .map((e) => `
+      <article class="changelog-entry ${newIds.has(e.id) ? "is-new" : ""}">
+        <div class="changelog-head">
+          ${newIds.has(e.id) ? `<span class="new-badge">NEW</span>` : ""}
+          <h4>${escapeHtml(e.title)}</h4>
+          <span class="changelog-date">${escapeHtml(e.date)}</span>
+        </div>
+        <ul>${e.items.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>
+      </article>`)
+    .join("") || `<div class="empty-note">업데이트 기록이 없어요</div>`;
+}
+
+function setGuideTab(tab) {
+  document.querySelectorAll("[data-guide-tab]").forEach((t) => t.classList.toggle("active", t.dataset.guideTab === tab));
+  $("guideUpdates").hidden = tab !== "updates";
+  $("guideHowto").hidden = tab !== "howto";
+}
+
+async function openGuide() {
+  if (!whatsNew) await loadWhatsNew().catch(() => {});
+  // 새 소식이 있으면 업데이트 내용부터, 없으면 사용 가이드부터 보여준다
+  setGuideTab(whatsNew?.hasNew ? "updates" : "howto");
+  renderGuideUpdates();
+  openModal("guideOverlay");
+
+  // 열어본 순간 "확인함"으로 저장 → 버튼/안내 띠는 원래대로 (팝업 안의 NEW 표시는 닫을 때까지 유지)
+  if (whatsNew?.hasNew) {
+    try {
+      await postJson("/api/whats-new/seen", "POST", {});
+      whatsNew = { ...whatsNew, hasNew: false };
+      renderWhatsNewIndicators();
+    } catch {
+      // 저장에 실패하면 다음에 다시 강조될 뿐이라 조용히 넘어간다
+    }
+  }
+}
+
 // ── 이벤트 연결 ─────────────────────────────────────
+
+$("openGuide").addEventListener("click", openGuide);
+$("whatsNewBannerBtn").addEventListener("click", openGuide);
+document.querySelectorAll("[data-guide-tab]").forEach((t) => {
+  t.addEventListener("click", () => setGuideTab(t.dataset.guideTab));
+});
 
 $("openLabelManager").addEventListener("click", openLabelManager);
 $("statUnlabeledCard").addEventListener("click", openLabelManager);
@@ -680,4 +744,5 @@ document.addEventListener("keydown", (e) => {
 });
 
 loadProducts();
+loadWhatsNew().catch((err) => console.error("업데이트 기록을 불러오지 못했어요:", err));
 loadMailTemplate().catch((err) => console.error("메일 양식을 불러오지 못했어요:", err));

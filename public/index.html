@@ -24,6 +24,11 @@
         <span class="mock-badge" id="mockBadge" hidden>샘플 데이터</span>
       </div>
       <nav class="top-actions">
+        <button id="openGuide" class="btn-ghost guide-btn">
+          <span class="new-dot" aria-hidden="true"></span>
+          <span id="guideBtnText">가이드</span>
+          <span class="new-badge">NEW</span>
+        </button>
         <button id="openLabelManager" class="btn-ghost">
           라벨 관리 <span id="labelCountBadge" class="dot-badge" hidden></span>
         </button>
@@ -34,6 +39,15 @@
   </header>
 
   <main class="page">
+    <div id="whatsNewBanner" class="whats-new-banner" hidden>
+      <span class="banner-icon" aria-hidden="true">✦</span>
+      <div class="banner-text">
+        <strong>프로그램이 업데이트됐어요</strong>
+        <span id="whatsNewBannerTitle"></span>
+      </div>
+      <button id="whatsNewBannerBtn" class="btn-primary btn-sm">무엇이 바뀌었는지 보기</button>
+    </div>
+
     <section class="page-head">
       <div>
         <h1>오늘의 발주</h1>
@@ -145,6 +159,58 @@
       </label>
       <div class="modal-actions">
         <button id="saveTemplate" class="btn-primary">양식 저장</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 업데이트 내용 · 가이드 -->
+  <div id="guideOverlay" class="overlay" hidden>
+    <div class="modal modal-wide">
+      <button class="btn-close" data-close="guideOverlay" aria-label="닫기">×</button>
+      <h3>업데이트 내용 · 가이드</h3>
+      <div class="tabs guide-tabs" role="tablist">
+        <button class="tab active" data-guide-tab="updates">업데이트 내용</button>
+        <button class="tab" data-guide-tab="howto">사용 가이드</button>
+      </div>
+
+      <div id="guideUpdates" class="guide-pane"></div>
+
+      <div id="guideHowto" class="guide-pane" hidden>
+        <section class="guide-section">
+          <h4>매일 이렇게 쓰세요</h4>
+          <ol>
+            <li>바탕화면 <b>'재고 발주 도우미'</b> 아이콘을 누르면 최신 버전으로 업데이트되고 화면이 열려요.</li>
+            <li>첫 화면의 <b>발주 필요</b> 목록을 확인해요. 빨간색일수록 급한 품목이에요.</li>
+            <li>품목을 눌러 <b>발주 메일 작성</b>을 누르면 권장 수량이 채워진 메일이 열려요.</li>
+          </ol>
+        </section>
+        <section class="guide-section">
+          <h4>색깔의 뜻</h4>
+          <div class="guide-legend">
+            <span class="status danger">품절 · ○일 남음</span><span>지금 발주해야 해요</span>
+            <span class="status warn">○일 남음</span><span>곧 발주가 필요해요</span>
+            <span class="status ok">○일 남음</span><span>재고가 넉넉해요</span>
+            <span class="status none">판매 없음</span><span>최근 판매 기록이 없어 계산할 수 없어요</span>
+          </div>
+          <p><b>권장 발주</b>는 입고까지 걸리는 기간과 여유일수 동안 팔릴 양에서 현재 재고를 뺀 수량이에요.</p>
+        </section>
+        <section class="guide-section">
+          <h4>라벨 한 번에 지정하기</h4>
+          <ol>
+            <li>상단 <b>라벨 관리</b>를 눌러요. 라벨이 없으면 맨 아래 줄에서 이름과 리드타임(입고까지 걸리는 일수)을 넣고 <b>라벨 추가</b>.</li>
+            <li>'라벨이 없는 품목'에서 품목을 눌러 체크해요. <b>품목 검색</b> 후 <b>전체 선택</b>하면 편해요.</li>
+            <li>오른쪽에서 라벨을 고르고 <b>선택한 ○개에 지정</b>을 눌러요.</li>
+          </ol>
+        </section>
+        <section class="guide-section">
+          <h4>문제가 생기면</h4>
+          <ul>
+            <li><b>'서버에 연결할 수 없어요'</b> → 바탕화면 아이콘을 다시 눌러주세요.</li>
+            <li><b>'품목을 불러오지 못했어요'</b> → 잠시 후 <b>새로고침</b>. 계속되면 화면을 캡처해 관리자에게 보내주세요.</li>
+            <li>팝업은 오른쪽 위 ×, 바깥 클릭, 또는 <b>Esc</b> 키로 닫을 수 있어요.</li>
+          </ul>
+        </section>
+        <a class="btn-outline guide-download" href="/docs/아틀리에말리-사용설명서.docx" download>전체 설명서 내려받기 (Word)</a>
       </div>
     </div>
   </div>

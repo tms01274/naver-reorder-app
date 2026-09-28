@@ -1,0 +1,12 @@
+{
+  "name": "mali-manual-tools",
+  "private": true,
+  "description": "사용 설명서(Word) 생성 도구 — 앱 실행에는 필요 없음",
+  "scripts": {
+    "build": "node build-manual.js"
+  },
+  "dependencies": {
+    "docx": "^9.5.0",
+    "puppeteer-core": "^23.11.1"
+  }
+}
