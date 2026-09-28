@@ -34,6 +34,14 @@ function Show-Error($msg) {
 # ── 1. 업데이트 확인 ─────────────────────────────────────
 $updated = $false
 if (Get-Command git -ErrorAction SilentlyContinue) {
+  # 예전 설치 방식은 주소에 GitHub 토큰을 넣어 받았다. 저장소가 공개라 토큰이 필요 없으므로
+  # PC 에 남은 토큰을 지운다 (https://<토큰>@github.com/... → https://github.com/...)
+  $originUrl = (git remote get-url origin 2>$null)
+  if ($originUrl -match "^https://[^/]+@github\.com/") {
+    git remote set-url origin ($originUrl -replace "^https://[^/]+@github\.com/", "https://github.com/")
+    Write-Log "저장소 주소에서 토큰 제거"
+  }
+
   # 네트워크가 느리거나 끊겨도 20초 이상 기다리지 않는다
   $fetch = Start-Process git -ArgumentList "fetch", "origin" -WorkingDirectory $AppDir -WindowStyle Hidden -PassThru
   $null = $fetch.Handle

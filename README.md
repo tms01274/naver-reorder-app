@@ -23,15 +23,16 @@ Node.js가 없으면 설치 페이지를 열어주고, 있으면 자동으로 �
 하나로 자동으로 바뀝니다(예전 "열기"/"업데이트" 아이콘은 지워짐). `.env` 설정과 `data` 폴더(공급업체 정보, 로그)는
 전혀 건드리지 않으니 안심하고 눌러도 됩니다.
 
-이 프로그램은 GitHub 비공개 저장소(`https://github.com/tms01274/naver-reorder-app`)로
-관리됩니다. 다른 PC/지점에 처음 설치할 때는 아래 순서로 진행하세요.
+이 프로그램은 GitHub **공개** 저장소(`https://github.com/tms01274/naver-reorder-app`)로
+관리되므로 코드를 받을 때 토큰이나 로그인이 필요 없습니다. (비공개로 바꾸면 매장 PC의 자동
+업데이트가 멈추니 주의하세요. API 키 등 비밀값은 `.env`에만 두고 저장소에 올리지 않습니다.)
+다른 PC/지점에 처음 설치할 때는 아래 순서로 진행하세요.
 
-1. Git 설치: `winget install --id Git.Git -e`
-2. GitHub CLI 설치: `winget install --id GitHub.cli -e`
-3. 로그인: `gh auth login --hostname github.com --git-protocol https --web`
-   (안내에 따라 브라우저에서 GitHub 계정으로 로그인/승인)
-4. 코드 받기: `git clone https://github.com/tms01274/naver-reorder-app.git`
-5. 받은 폴더 안에서 `설치하기.bat` 더블클릭 → 이후로는 바탕화면 아이콘만 누르면 자동 최신화
+1. Git 설치: `winget install --id Git.Git -e` (끝나면 PowerShell 을 닫고 새로 열기)
+2. 코드 받기: `git clone https://github.com/tms01274/naver-reorder-app.git C:\naver-reorder-app`
+3. 받은 폴더 안에서 `설치하기.bat` 더블클릭 → 이후로는 바탕화면 아이콘만 누르면 자동 최신화
+
+사용법은 `docs/아틀리에말리-사용설명서.docx` (화면 캡처가 들어간 Word 설명서)를 참고하세요.
 
 아래는 터미널로 직접 하고 싶을 때(개발/Mac 등)를 위한 수동 설치 방법입니다.
 
