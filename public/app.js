@@ -55,7 +55,10 @@ function escapeHtml(s) {
 }
 
 function openModal(id) { $(id).hidden = false; }
-function closeModal(id) { $(id).hidden = true; }
+function closeModal(id) {
+  if (!$(id).hidden && !confirmDiscardEdits($(id))) return;
+  $(id).hidden = true;
+}
 
 // 삭제처럼 되돌릴 수 없는 버튼: 한 번 누르면 "한 번 더 누르면 삭제" 상태가 되고, 3초 안에 다시 눌러야 실행
 function confirmClick(btn, label, action) {
@@ -671,14 +674,15 @@ function todayText() {
 }
 
 // ── 발주서 만들기 ───────────────────────────────────
-// 업체를 고르면 그 업체 품목이 나오고(발주 필요 품목은 미리 체크), 수량을 고쳐서
+// 1) 업체 선택 화면 → 2) 그 업체 품목 화면(발주 필요 품목은 미리 체크, 위쪽에 선택 요약·다음 버튼 고정) → 3) 메일.
+// 수량을 고쳐서
 // 메일 한 통 분량의 받는 사람 · 제목 · 본문을 만든다. 웹메일에 붙여넣기 쉽게 각각 복사 버튼을 둔다.
 
 const order = {
   vendorId: "",
   items: new Map(), // productId -> { checked, qty }
   extraIds: [], // 업체에 연결되지 않았지만 직접 추가한 품목
-  step: "items",
+  step: "vendor", // vendor(업체 선택) → items(품목) → mail
   addSearch: "",
   recorded: false, // 이 발주서를 이미 발주 기록으로 남겼는지 (두 번 기록 방지)
 };
@@ -708,7 +712,7 @@ function selectOrderVendor(vendorId, preselectId) {
   order.vendorId = vendorId;
   order.items = new Map();
   order.extraIds = [];
-  order.step = "items";
+  order.step = vendorId ? "items" : "vendor";
   order.addSearch = "";
   order.recorded = false;
   if (preselectId) {
@@ -757,13 +761,19 @@ function buildOrderMail() {
 }
 
 function renderOrder() {
-  if (order.step === "mail") return renderOrderMail();
+  const modal = $("orderOverlay").querySelector(".modal");
+  if (order.step === "mail") {
+    modal.classList.add("order-fixed");
+    return renderOrderMail();
+  }
   const vendor = vendorById(order.vendorId);
+  if (order.step === "items" && vendor) return renderOrderItems(vendor, modal);
+  modal.classList.remove("order-fixed");
+
   const needsByVendor = new Map();
   for (const p of currentData?.products || []) {
     if (p.vendorId && p.needsReorder) needsByVendor.set(p.vendorId, (needsByVendor.get(p.vendorId) || 0) + 1);
   }
-
   const vendorPicker = currentVendors.length
     ? `<div class="vendor-picker">
         ${currentVendors.map((v) => `
@@ -774,36 +784,57 @@ function renderOrder() {
       </div>`
     : `<div class="hint-box">등록된 업체가 없어요. <button type="button" class="btn-outline btn-sm" data-open-vendors>업체 관리</button>에서 업체를 먼저 등록해주세요.</div>`;
 
-  let itemsHtml = "";
-  if (vendor) {
-    const ids = orderRowIds();
-    for (const id of ids) ensureOrderItem(id, false);
-    itemsHtml = `
+  $("orderBody").innerHTML = `
+    <h3>발주서 만들기</h3>
+    <p class="modal-desc">발주할 업체를 골라주세요. 그 업체 품목이 나오고, 발주가 필요한 품목은 미리 체크돼 있어요.</p>
+    ${vendorPicker}
+  `;
+  bindOrderEvents();
+}
+
+// 품목 화면: 위쪽(업체 · 선택 요약 · 메일 내용 만들기)은 고정, 품목 목록만 스크롤
+function renderOrderItems(vendor, modal) {
+  const oldPane = document.querySelector("#orderBody .order-pane");
+  const keepTop = modal.classList.contains("order-fixed") && oldPane?.dataset.vendor === vendor.id ? oldPane.scrollTop : 0;
+  modal.classList.add("order-fixed");
+  const ids = orderRowIds();
+  for (const id of ids) ensureOrderItem(id, false);
+
+  $("orderBody").innerHTML = `
+    <div class="order-top">
+      <h3>발주서 만들기</h3>
+      <div class="order-vendor-line">
+        <span class="order-vendor-current" data-current-vendor="${escapeHtml(vendor.id)}">${escapeHtml(vendor.name)}${vendor.lang && vendor.lang !== "ko" ? ` <span class="lang-badge">${escapeHtml(langInfo(vendor.lang).label)}</span>` : ""}</span>
+        <button type="button" class="btn-ghost btn-sm" id="orderChangeVendor">업체 바꾸기</button>
+        <div class="order-add">
+          <input id="orderAddSearch" class="input" type="search" placeholder="다른 품목 추가 (이름 검색)" value="${escapeHtml(order.addSearch)}" autocomplete="off" />
+          <div id="orderAddResults" class="order-add-results"></div>
+        </div>
+      </div>
+      <div class="order-bar">
+        <span id="orderSummary" class="order-summary"></span>
+        <button class="btn-primary" id="orderToMail">메일 내용 만들기</button>
+      </div>
+    </div>
+    <div class="order-pane" data-vendor="${escapeHtml(vendor.id)}">
       ${vendor.email ? "" : `<div class="warn-box">이 업체의 이메일이 없어요. 받는 사람은 비워진 채로 만들어져요. <button type="button" class="btn-ghost btn-sm" data-open-vendors>업체 관리에서 입력</button></div>`}
       <div class="order-table">
         <div class="order-head"><span></span><span>품목</span><span class="num">재고</span><span>남은 기간</span><span class="num">발주 수량</span></div>
-        ${ids.length ? ids.map((id) => orderRowHtml(productById(id), order.items.get(id))).join("") : `<div class="empty-note">이 업체에 연결된 품목이 없어요. 아래에서 품목을 추가하거나, 업체 관리에서 품목을 연결해주세요.</div>`}
+        ${ids.length ? ids.map((id) => orderRowHtml(productById(id), order.items.get(id))).join("") : `<div class="empty-note">이 업체에 연결된 품목이 없어요. 위 '다른 품목 추가'에서 품목을 찾아 넣거나, 업체 관리에서 품목을 연결해주세요.</div>`}
       </div>
-      <div class="order-add">
-        <input id="orderAddSearch" class="input" type="search" placeholder="다른 품목 추가 (이름 검색)" value="${escapeHtml(order.addSearch)}" autocomplete="off" />
-        <div id="orderAddResults" class="order-add-results"></div>
-      </div>`;
-  }
-
-  $("orderBody").innerHTML = `
-    <h3>발주서 만들기</h3>
-    <p class="modal-desc">업체를 고르면 그 업체 품목이 나와요. 발주가 필요한 품목은 미리 체크돼 있고, 수량은 고칠 수 있어요.</p>
-    <h4>1. 업체 선택</h4>
-    ${vendorPicker}
-    ${vendor ? `<h4>2. 보낼 품목과 수량</h4>${itemsHtml}` : ""}
-    <div class="order-footer">
-      <span id="orderSummary" class="order-summary"></span>
-      <button class="btn-primary" id="orderToMail" ${vendor ? "" : "disabled"}>메일 내용 만들기</button>
     </div>
   `;
+  if (keepTop) document.querySelector("#orderBody .order-pane").scrollTop = keepTop;
+  if (order.justAdded) {
+    const row = document.querySelector(`#orderBody .order-row[data-order-id="${CSS.escape(order.justAdded)}"]`);
+    row?.scrollIntoView({ block: "center" });
+    row?.classList.add("just-added");
+    order.justAdded = null;
+  }
   updateOrderSummary();
   renderOrderAddResults();
   bindOrderEvents();
+  $("orderChangeVendor").addEventListener("click", () => { order.step = "vendor"; renderOrder(); });
 }
 
 function orderRowHtml(p, item) {
@@ -886,6 +917,10 @@ function bindOrderEvents() {
       order.addSearch = search.value;
       renderOrderAddResults();
     });
+    // 검색 결과는 목록 위에 겹쳐 뜨므로, 다른 곳을 누르면 접고 검색칸을 다시 누르면 편다
+    search.addEventListener("blur", () => { $("orderAddResults").hidden = true; });
+    search.addEventListener("focus", () => { $("orderAddResults").hidden = false; });
+    $("orderAddResults").addEventListener("mousedown", (e) => e.preventDefault()); // 결과를 누를 때 접히지 않게
   }
   $("orderAddResults")?.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-add-id]");
@@ -894,6 +929,7 @@ function bindOrderEvents() {
     ensureOrderItem(btn.dataset.addId, true);
     order.items.get(btn.dataset.addId).checked = true;
     order.addSearch = "";
+    order.justAdded = btn.dataset.addId;
     renderOrder();
     toast("품목을 추가했어요");
   });
@@ -944,12 +980,28 @@ function renderOrderMail() {
   const mail = buildOrderMail();
   const vendor = vendorById(order.vendorId);
   $("orderBody").innerHTML = `
+    <div class="order-top">
     <h3>발주 메일 — ${escapeHtml(vendor?.name || "")} <span class="lang-badge">${escapeHtml(mail.lang.label)}</span></h3>
+    <div class="order-vendor-line">
+      <button class="btn-ghost btn-sm" id="orderBack">← 품목 다시 고르기</button>
+      <span class="spacer"></span>
+      <button class="btn-ghost btn-sm" id="orderMailto">PC 메일 프로그램으로 열기</button>
+      <a class="btn-primary btn-sm" id="orderOpenNaver" href="https://mail.naver.com/" target="_blank" rel="noopener">네이버 메일 열기</a>
+    </div>
+    <div class="record-bar ${order.recorded ? "done" : ""}">
+      <div class="record-text">
+        <strong>${order.recorded ? "발주를 기록했어요" : "메일을 보냈으면 기록해 두세요"}</strong>
+        <span>${order.recorded ? "이 품목들은 '입고 대기'로 표시돼요. 입고되면 '발주 기록'에서 입고 완료를 눌러주세요." : "기록하면 '입고 대기'로 표시되고, 같은 품목을 또 발주하지 않게 알려줘요."}</span>
+      </div>
+      <button class="btn-primary" id="orderRecord" ${order.recorded ? "disabled" : ""}>${order.recorded ? "기록됨 ✓" : "발주 완료로 기록"}</button>
+    </div>
+    </div>
+    <div class="order-pane">
     <ol class="mail-steps">
-      <li><b>네이버 메일 열기</b>를 눌러 메일 쓰기 화면을 열어요.</li>
+      <li>위 <b>네이버 메일 열기</b>를 눌러 메일 쓰기 화면을 열어요.</li>
       <li>아래 <b>받는 사람 · 제목 · 본문</b>을 차례로 <b>복사</b>해서 붙여넣어요.</li>
       <li>내용을 확인하고 네이버 메일에서 <b>보내기</b>를 눌러요.</li>
-      <li>보냈으면 맨 아래 <b>발주 완료로 기록</b>을 눌러요.</li>
+      <li>보냈으면 위 <b>발주 완료로 기록</b>을 눌러요.</li>
     </ol>
     <div class="mail-field">
       <div class="mail-field-head"><span>받는 사람</span><button type="button" class="btn-outline btn-sm" data-copy="orderTo">복사</button></div>
@@ -964,18 +1016,6 @@ function renderOrderMail() {
       <textarea id="orderMailBody" class="input" rows="12">${escapeHtml(mail.body)}</textarea>
     </div>
     <p class="muted small">여기서 내용을 고쳐도 돼요. 고친 내용 그대로 복사돼요. 매번 쓰는 문구는 상단 <b>메일 양식</b>에서 바꿀 수 있어요.</p>
-    <div class="order-footer">
-      <button class="btn-ghost" id="orderBack">← 품목 다시 고르기</button>
-      <span class="spacer"></span>
-      <button class="btn-ghost btn-sm" id="orderMailto">PC 메일 프로그램으로 열기</button>
-      <a class="btn-primary" id="orderOpenNaver" href="https://mail.naver.com/" target="_blank" rel="noopener">네이버 메일 열기</a>
-    </div>
-    <div class="record-bar ${order.recorded ? "done" : ""}">
-      <div class="record-text">
-        <strong>${order.recorded ? "발주를 기록했어요" : "메일을 보냈으면 기록해 두세요"}</strong>
-        <span>${order.recorded ? "이 품목들은 '입고 대기'로 표시돼요. 입고되면 '발주 기록'에서 입고 완료를 눌러주세요." : "기록하면 '입고 대기'로 표시되고, 같은 품목을 또 발주하지 않게 알려줘요."}</span>
-      </div>
-      <button class="btn-primary" id="orderRecord" ${order.recorded ? "disabled" : ""}>${order.recorded ? "기록됨 ✓" : "발주 완료로 기록"}</button>
     </div>
   `;
   $("orderRecord").addEventListener("click", recordCurrentOrder);
@@ -1146,6 +1186,7 @@ function managerTabsHtml(state, listLabel, listCount, assignLabel, unassignedCou
 function bindManagerTabs(bodyId, state, rerender) {
   document.querySelectorAll(`#${bodyId} [data-mgr-tab]`).forEach((b) => {
     b.addEventListener("click", () => {
+      if (b.dataset.mgrTab !== state.tab && !confirmDiscardEdits($(bodyId))) return;
       state.tab = b.dataset.mgrTab;
       rerender();
     });
@@ -1161,6 +1202,70 @@ function bindManagerTabs(bodyId, state, rerender) {
   });
 }
 
+// ── 목록 줄 고치기: 고친 줄에만 "변경 저장" 버튼이 나타난다 ─────────
+// 줄: [data-edit-id], 칸: [data-field], 저장 버튼: .row-save-btn
+function editRowValues(row) {
+  return Object.fromEntries([...row.querySelectorAll("[data-field]")].map((el) => [el.dataset.field, el.value]));
+}
+
+function updateRowDirty(row) {
+  const now = editRowValues(row);
+  const dirty = Object.keys(now).some((k) => now[k] !== row.querySelector(`[data-field="${k}"]`).dataset.orig);
+  row.classList.toggle("dirty", dirty);
+  const btn = row.querySelector(".row-save-btn");
+  btn.disabled = !dirty;
+  btn.style.visibility = dirty ? "" : "hidden"; // 자리는 남겨서 줄 모양이 흔들리지 않게
+}
+
+function bindEditRows(bodyId, save) {
+  document.querySelectorAll(`#${bodyId} [data-edit-id]`).forEach((row) => {
+    row.querySelectorAll("[data-field]").forEach((el) => {
+      el.dataset.orig ??= el.value;
+      el.addEventListener("input", () => updateRowDirty(row));
+      el.addEventListener("change", () => updateRowDirty(row));
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter" && row.classList.contains("dirty")) save(row); });
+    });
+    row.querySelector(".row-save-btn").addEventListener("click", () => save(row));
+    updateRowDirty(row);
+  });
+}
+
+// 다시 그리기 전에 저장 안 한 줄의 입력값을 챙겨 두었다가 되살린다 (다른 줄을 저장해도 안 사라지게)
+function captureDirtyRows(bodyId) {
+  const saved = new Map();
+  if ($(bodyId).closest(".overlay")?.hidden) return saved; // 닫혀 있던 창은 새로 시작
+  document.querySelectorAll(`#${bodyId} [data-edit-id].dirty`).forEach((row) => saved.set(row.dataset.editId, editRowValues(row)));
+  return saved;
+}
+
+function restoreDirtyRows(bodyId, saved) {
+  for (const [id, values] of saved) {
+    const row = document.querySelector(`#${bodyId} [data-edit-id="${CSS.escape(id)}"]`);
+    if (!row) continue;
+    for (const [k, v] of Object.entries(values)) {
+      const el = row.querySelector(`[data-field="${k}"]`);
+      if (el) el.value = v;
+    }
+    updateRowDirty(row);
+  }
+}
+
+// 저장 안 한 줄이 있으면 첫 번째는 알려주고 막는다. 4초 안에 한 번 더 하면 버리고 진행
+function confirmDiscardEdits(container) {
+  const dirty = container.querySelectorAll("[data-edit-id].dirty");
+  if (!dirty.length || container.dataset.discardOk) {
+    delete container.dataset.discardOk;
+    return true;
+  }
+  container.dataset.discardOk = "1";
+  setTimeout(() => delete container.dataset.discardOk, 4000);
+  dirty.forEach((row) => row.classList.add("dirty-flash"));
+  setTimeout(() => dirty.forEach((row) => row.classList.remove("dirty-flash")), 1200);
+  dirty[0].scrollIntoView({ block: "nearest" });
+  toast("저장 안 한 내용이 있어요. '변경 저장'을 누르거나, 버리려면 한 번 더 눌러주세요.", "error");
+  return false;
+}
+
 // 목록이 길어지면 찾기 쉽게 검색칸을 보여준다
 function listSearchHtml(count, placeholder, value) {
   return count > 5 ? `<input class="input search list-search" type="search" placeholder="${placeholder}" value="${escapeHtml(value)}" />` : "";
@@ -1174,8 +1279,8 @@ function matchesListSearch(state, text) {
 // ── 업체 관리 ───────────────────────────────────────
 
 // 업체의 발주서 언어 고르기 상자
-function langSelectHtml(className, selected, id) {
-  return `<select class="${className}" ${id ? `id="${id}"` : ""} aria-label="발주서 언어" title="발주서 언어">
+function langSelectHtml(className, selected, id, field) {
+  return `<select class="${className}" ${id ? `id="${id}"` : ""} ${field ? `data-field="${field}"` : ""} aria-label="발주서 언어" title="발주서 언어">
     ${mailLanguages.map((l) => `<option value="${l.code}" ${l.code === selected ? "selected" : ""}>${escapeHtml(l.label)}</option>`).join("")}
   </select>`;
 }
@@ -1228,13 +1333,13 @@ function renderVendorManagerBody() {
     ${listSearchHtml(currentVendors.length, "업체 검색", s.listSearch)}
     <div class="label-list">
       ${currentVendors.length ? currentVendors.map((v) => `
-        <div class="vendor-edit-row" data-vendor-id="${escapeHtml(v.id)}" data-search-text="${escapeHtml(`${v.name} ${v.email || ""}`.toLowerCase())}" ${matchesListSearch(s, `${v.name} ${v.email || ""}`) ? "" : "hidden"}>
-          <input class="input vendor-edit-name" type="text" value="${escapeHtml(v.name)}" aria-label="업체 이름" />
-          <input class="input vendor-edit-email" type="email" value="${escapeHtml(v.email || "")}" placeholder="이메일" aria-label="이메일" />
-          ${langSelectHtml("input vendor-edit-lang", v.lang || "ko")}
+        <div class="vendor-edit-row" data-vendor-id="${escapeHtml(v.id)}" data-edit-id="${escapeHtml(v.id)}" data-search-text="${escapeHtml(`${v.name} ${v.email || ""}`.toLowerCase())}" ${matchesListSearch(s, `${v.name} ${v.email || ""}`) ? "" : "hidden"}>
+          <input class="input vendor-edit-name" data-field="name" type="text" value="${escapeHtml(v.name)}" aria-label="업체 이름" />
+          <input class="input vendor-edit-email" data-field="email" type="email" value="${escapeHtml(v.email || "")}" placeholder="이메일" aria-label="이메일" />
+          ${langSelectHtml("input vendor-edit-lang", v.lang || "ko", null, "lang")}
           <span class="muted small nowrap">품목 ${countByVendor.get(v.id) || 0}개</span>
           <div class="label-row-actions">
-            <button class="btn-outline btn-sm update-vendor-btn">저장</button>
+            <button class="btn-primary btn-sm row-save-btn update-vendor-btn" style="visibility:hidden" disabled>변경 저장</button>
             <button class="btn-danger-ghost btn-sm delete-vendor-btn">삭제</button>
           </div>
         </div>`).join("") : `<div class="empty-note">아직 등록된 업체가 없어요. 위 칸에서 추가해주세요.</div>`}
@@ -1242,6 +1347,7 @@ function renderVendorManagerBody() {
 
   const cfg = vendorAssignCfg();
   const keepTop = paneScrollBefore("vendorManagerBody", `${s.tab}|${s.filter}`);
+  const unsaved = captureDirtyRows("vendorManagerBody");
   $("vendorManagerBody").innerHTML = `
     <h3>거래 업체</h3>
     <p class="modal-desc">발주를 보내는 업체와 이메일을 등록하고, 품목을 업체에 연결해요. 발주서를 만들 때 업체를 고르면 연결된 품목이 나와요.</p>
@@ -1261,22 +1367,21 @@ function renderVendorManagerBody() {
   for (const id of ["newVendorName", "newVendorEmail"]) {
     $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") createVendorFromForm(); });
   }
-  document.querySelectorAll(".update-vendor-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const row = btn.closest(".vendor-edit-row");
-      const name = row.querySelector(".vendor-edit-name").value.trim();
-      const email = row.querySelector(".vendor-edit-email").value.trim();
-      const lang = row.querySelector(".vendor-edit-lang").value;
-      try {
-        await postJson(`/api/vendors/${row.dataset.vendorId}`, "PUT", { name, email, lang });
-      } catch (err) {
-        toast(err.message || "업체 저장에 실패했어요.", "error");
-        return;
-      }
-      toast("업체를 저장했어요");
-      await refreshAfterLabelChange();
-    });
+  bindEditRows("vendorManagerBody", async (row) => {
+    const name = row.querySelector(".vendor-edit-name").value.trim();
+    const email = row.querySelector(".vendor-edit-email").value.trim();
+    const lang = row.querySelector(".vendor-edit-lang").value;
+    try {
+      await postJson(`/api/vendors/${row.dataset.vendorId}`, "PUT", { name, email, lang });
+    } catch (err) {
+      toast(err.message || "업체 저장에 실패했어요.", "error");
+      return;
+    }
+    row.classList.remove("dirty");
+    toast("업체를 저장했어요");
+    await refreshAfterLabelChange();
   });
+  restoreDirtyRows("vendorManagerBody", unsaved);
   document.querySelectorAll(".delete-vendor-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const row = btn.closest(".vendor-edit-row");
@@ -1564,13 +1669,13 @@ function renderLabelManagerBody() {
     ${listSearchHtml(currentLabels.length, "라벨 검색", s.listSearch)}
     <div class="label-list">
       ${currentLabels.length ? currentLabels.map((l) => `
-        <div class="label-edit-row" data-label-id="${escapeHtml(l.id)}" data-search-text="${escapeHtml(l.name.toLowerCase())}" ${matchesListSearch(s, l.name) ? "" : "hidden"}>
+        <div class="label-edit-row" data-label-id="${escapeHtml(l.id)}" data-edit-id="${escapeHtml(l.id)}" data-search-text="${escapeHtml(l.name.toLowerCase())}" ${matchesListSearch(s, l.name) ? "" : "hidden"}>
           <span class="swatch" style="background:${l.color || "#888"};"></span>
-          <input class="input label-edit-name" type="text" value="${escapeHtml(l.name)}" aria-label="라벨 이름" />
-          <div class="input-suffix"><input class="input label-edit-leadtime" type="number" min="0" value="${l.leadTimeDays}" aria-label="리드타임" /><span>일</span></div>
+          <input class="input label-edit-name" data-field="name" type="text" value="${escapeHtml(l.name)}" aria-label="라벨 이름" />
+          <div class="input-suffix"><input class="input label-edit-leadtime" data-field="leadTimeDays" type="number" min="0" value="${l.leadTimeDays}" aria-label="리드타임" /><span>일</span></div>
           <span class="muted small nowrap">품목 ${countByLabel.get(l.id) || 0}개</span>
           <div class="label-row-actions">
-            <button class="btn-outline btn-sm update-label-btn">저장</button>
+            <button class="btn-primary btn-sm row-save-btn update-label-btn" style="visibility:hidden" disabled>변경 저장</button>
             <button class="btn-danger-ghost btn-sm delete-label-btn">삭제</button>
           </div>
         </div>`).join("") : `<div class="empty-note">아직 만든 라벨이 없어요. 위 칸에서 추가해주세요.</div>`}
@@ -1578,6 +1683,7 @@ function renderLabelManagerBody() {
 
   const cfg = labelAssignCfg();
   const keepTop = paneScrollBefore("labelManagerBody", `${s.tab}|${s.filter}`);
+  const unsaved = captureDirtyRows("labelManagerBody");
   $("labelManagerBody").innerHTML = `
     <h3>입고유형 라벨</h3>
     <p class="modal-desc">국내/수입처럼 입고까지 걸리는 기간이 다른 품목을 라벨로 나눠요. 라벨의 리드타임으로 발주 시점을 계산해요.</p>
@@ -1597,18 +1703,16 @@ function renderLabelManagerBody() {
   for (const id of ["newLabelName", "newLabelLeadTime"]) {
     $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") createLabelFromForm(); });
   }
-  document.querySelectorAll(".update-label-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const row = btn.closest(".label-edit-row");
-      const name = row.querySelector(".label-edit-name").value.trim();
-      const leadTimeDays = row.querySelector(".label-edit-leadtime").value;
-      if (!name || leadTimeDays === "") {
-        toast("라벨 이름과 리드타임을 모두 입력해주세요.", "error");
-        return;
-      }
-      updateLabelRequest(row.dataset.labelId, name, leadTimeDays);
-    });
+  bindEditRows("labelManagerBody", (row) => {
+    const name = row.querySelector(".label-edit-name").value.trim();
+    const leadTimeDays = row.querySelector(".label-edit-leadtime").value;
+    if (!name || leadTimeDays === "") {
+      toast("라벨 이름과 리드타임을 모두 입력해주세요.", "error");
+      return;
+    }
+    updateLabelRequest(row.dataset.labelId, name, leadTimeDays);
   });
+  restoreDirtyRows("labelManagerBody", unsaved);
   document.querySelectorAll(".delete-label-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const row = btn.closest(".label-edit-row");
@@ -1641,6 +1745,7 @@ async function updateLabelRequest(labelId, name, leadTimeDays) {
     toast(err.message || "라벨 수정에 실패했어요.", "error");
     return;
   }
+  document.querySelector(`[data-edit-id="${CSS.escape(labelId)}"]`)?.classList.remove("dirty");
   toast("라벨을 저장했어요");
   await refreshAfterLabelChange();
 }
@@ -1772,6 +1877,14 @@ document.addEventListener("keydown", (e) => {
   const open = [...document.querySelectorAll(".overlay")].filter((o) => !o.hidden);
   if (open.length) closeModal(open[open.length - 1].id);
 });
+
+// 목록 위쪽(탭·검색)이 상단 바 바로 아래에 붙도록 상단 바 높이를 CSS 에 알려준다
+function syncTopbarHeight() {
+  const bar = document.querySelector(".topbar");
+  if (bar) document.documentElement.style.setProperty("--topbar-h", `${bar.offsetHeight}px`);
+}
+syncTopbarHeight();
+window.addEventListener("resize", syncTopbarHeight);
 
 loadProducts();
 loadWhatsNew().catch((err) => console.error("업데이트 기록을 불러오지 못했어요:", err));

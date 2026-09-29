@@ -115,8 +115,8 @@ async function captureScreens(url) {
   await wait(800);
   await p.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.remove()));
   const bar = await p.evaluate(() => {
-    const r = document.querySelector("#orderOverlay .record-bar").getBoundingClientRect();
-    return { x: r.x - 16, y: r.y - 70, width: r.width + 32, height: r.height + 86 };
+    const r = document.querySelector("#orderOverlay .order-top").getBoundingClientRect();
+    return { x: r.x - 16, y: r.y - 16, width: r.width + 32, height: r.height + 24 };
   });
   await p.screenshot({ path: path.join(SHOTS, "12-record.png"), clip: bar });
   await p.setViewport({ width: 1280, height: 820, deviceScaleFactor: 1.5 });

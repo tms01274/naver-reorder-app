@@ -204,8 +204,14 @@ SUITES.labels = {
     // 목록 탭: 수정 / 삭제 / 검색
     await p.click('#labelManagerBody [data-mgr-tab="list"]'); await wait(200);
     check("목록 탭에 라벨별 품목 수", (await p.$$eval(".label-edit-row[data-label-id] .small", (x) => x.map((e) => e.textContent))).every((t) => /품목 \d+개/.test(t)));
+    const saveVisible = () => p.$eval(".label-edit-row[data-label-id] .update-label-btn", (b) => b.style.visibility !== "hidden");
+    check("안 고친 줄은 저장 버튼이 안 보임", !(await saveVisible()));
     const lt = await p.$(".label-edit-row[data-label-id] .label-edit-leadtime"); await lt.click({ clickCount: 3 }); await lt.type("3");
+    check("고치면 '변경 저장' 버튼이 나타남", await saveVisible());
+    await p.keyboard.press("Escape"); await wait(200);
+    check("저장 안 하고 닫으면 한 번은 막고 안내", !(await p.$eval("#labelOverlay", (o) => o.hidden)) && (await toasts()).some((t) => t.includes("저장 안 한 내용")));
     await p.click(".label-edit-row[data-label-id] .update-label-btn"); await wait(500);
+    check("저장하면 버튼이 다시 사라짐", !(await saveVisible()));
     check("라벨 리드타임 수정", await p.$eval(".label-edit-row[data-label-id] .label-edit-leadtime", (e) => e.value) === "3");
     await p.type("#newLabelName", "임시"); await p.type("#newLabelLeadTime", "1"); await p.click("#createLabelBtn"); await wait(500);
     const delBtn = async () => (await p.$$(".label-edit-row[data-label-id] .delete-label-btn"))[2];
@@ -244,6 +250,18 @@ SUITES.main = {
     check("발주 필요 목록 행 수", (await rows()) === reorderN);
     const firstStatus = await txt(".product-row .status");
     check("긴급한 순 정렬 (품절 먼저)", firstStatus === "품절", firstStatus);
+    // 긴 목록(전체 탭)에서 중간까지 내린다 (끝까지 내리면 목록 끝과 함께 올라가는 게 정상)
+    await p.click('.tab[data-tab="all"]'); await wait(100);
+    await p.evaluate(() => {
+      const card = document.querySelector(".list-card").getBoundingClientRect();
+      window.scrollTo(0, card.top + window.scrollY - document.querySelector(".topbar").offsetHeight + 150);
+    });
+    await wait(150);
+    check("목록을 내려도 탭·검색·표 제목은 상단 바 아래 고정", await p.evaluate(() => {
+      const bar = document.querySelector(".topbar").getBoundingClientRect(), st = document.querySelector(".list-sticky").getBoundingClientRect();
+      return Math.abs(st.top - bar.bottom) <= 2 && !!document.querySelector(".list-sticky #tableHead");
+    }), await p.evaluate(() => `${Math.round(document.querySelector(".list-sticky").getBoundingClientRect().top)} / ${document.querySelector(".topbar").offsetHeight}`));
+    await p.evaluate(() => window.scrollTo(0, 0));
     await p.click('.tab[data-tab="soon"]'); await wait(100);
     check("곧 필요 탭", (await rows()) === soonN);
     await p.click('.stat[data-tab="all"]'); await wait(100);
@@ -307,12 +325,18 @@ SUITES.order = {
     await helpers(p).closeAutoPopup();
     await p.click("#openOrderBtn"); await wait(250);
     check("처음엔 업체 선택만", (await p.$$(".vendor-card")).length === 2 && !(await p.$(".order-row")));
-    check("메일 버튼 비활성 (업체 미선택)", await p.$eval("#orderToMail", (e) => e.disabled));
+    check("업체 선택 화면엔 메일 버튼 없음", !(await p.$("#orderToMail")));
+    const needCount = await p.$eval('[data-order-vendor="gw"] .vendor-meta', (e) => e.textContent);
     await p.click('[data-order-vendor="gw"]'); await wait(250);
+    check("업체 고르면 품목 화면으로 (업체 카드 숨김)", !(await p.$(".vendor-card")) && (await p.$eval(".order-vendor-current", (e) => e.textContent)).includes("글라스월드"));
+    check("선택 요약 · 메일 버튼 · 품목 추가는 위쪽 고정 (목록만 스크롤)", await p.evaluate(() => {
+      const top = document.querySelector("#orderBody .order-top"), pane = document.querySelector("#orderBody .order-pane");
+      return !!top.querySelector("#orderSummary") && !!top.querySelector("#orderToMail") && !!top.querySelector("#orderAddSearch")
+        && !pane.contains(document.querySelector("#orderToMail")) && getComputedStyle(pane).overflowY === "auto";
+    }));
     const orderRows = (await p.$$(".order-row")).length;
     check("업체 품목만 나옴", orderRows === gaCount, `${orderRows}/${gaCount}`);
     const preChecked = await p.$$eval(".order-row", (r) => r.filter((x) => x.querySelector(".order-check").checked).length);
-    const needCount = await p.$eval('[data-order-vendor="gw"] .vendor-meta', (e) => e.textContent);
     check("발주 필요 품목 미리 체크", needCount.includes(String(preChecked)), `${preChecked} / ${needCount}`);
     const firstQty = await p.$(".order-row .order-qty");
     await firstQty.click({ clickCount: 3 }); await firstQty.type("50"); await wait(100);
@@ -343,8 +367,11 @@ SUITES.order = {
     const clip = await p.evaluate(() => navigator.clipboard.readText().catch(() => null));
     check("본문 복사", clip === null ? (await p.$eval('[data-copy="orderMailBody"]', (e) => e.textContent)).includes("복사됨") : clip === body);
     check("네이버 메일 링크", (await p.$eval("#orderOpenNaver", (a) => a.href)).startsWith("https://mail.naver.com"));
+    check("메일 화면: 발주 완료로 기록은 위쪽 고정", await p.evaluate(() => !!document.querySelector("#orderBody .order-top #orderRecord") && !!document.querySelector("#orderBody .order-pane #orderMailBody")));
     await p.click("#orderBack"); await wait(200);
     check("품목 다시 고르기 → 선택 유지", (await p.$eval(".order-row .order-qty", (e) => e.value)) === "50");
+    await p.click("#orderChangeVendor"); await wait(200);
+    check("업체 바꾸기 → 업체 선택 화면", (await p.$$(".vendor-card")).length === 2);
     await p.click('[data-order-vendor="ac"]'); await wait(250);
     check("품목 없는 업체 → 안내 + 이메일 없음 경고", !!(await p.$(".order-table .empty-note")) && !!(await p.$(".warn-box")));
     check("선택 0개면 메일 버튼 비활성", await p.$eval("#orderToMail", (e) => e.disabled));
@@ -372,7 +399,7 @@ SUITES.detail = {
     check("리드타임 비우면 라벨값(20일) 사용", (await statValues())[2] === "20일");
     const detailName = await p.$eval("#detailBody h3", (e) => e.textContent);
     await p.click("#orderFromDetail"); await wait(300);
-    check("상세 → 발주서: 그 업체 선택 + 품목 체크", await p.$eval('[data-order-vendor="ac"]', (e) => e.classList.contains("active"))
+    check("상세 → 발주서: 그 업체 선택 + 품목 체크", !!(await p.$('[data-current-vendor="ac"]'))
       && await p.$$eval(".order-row", (r, n) => r.some((x) => x.textContent.includes(n) && x.querySelector(".order-check").checked), detailName));
     await p.click("#orderOverlay .btn-close"); await wait(150);
     check("X 로 발주서 닫힘", await hidden("orderOverlay"));
@@ -398,7 +425,7 @@ SUITES.overseas = {
     await p.type("#vendorItemName", "Sun catcher acrylic M"); await p.click("#saveSupplier"); await wait(600);
     check("업체용 품명 저장", (await p.$eval("#vendorItemName", (e) => e.value)) === "Sun catcher acrylic M");
     await p.click("#orderFromDetail"); await wait(300);
-    check("업체 카드에 언어 표시", (await p.$eval('[data-order-vendor="ac"]', (e) => e.textContent)).includes("English"));
+    check("업체 카드에 언어 표시", (await p.$eval('[data-current-vendor="ac"]', (e) => e.textContent)).includes("English"));
     check("품목에 업체용 품명 표시", (await p.$$eval(".vendor-item-name", (x) => x.map((e) => e.textContent))).some((t) => t.includes("Sun catcher acrylic M")));
     const q = await p.$(".order-row.checked .order-qty"); await q.click({ clickCount: 3 }); await q.type("12");
     await p.click("#orderToMail"); await wait(250);
@@ -540,7 +567,7 @@ SUITES.today = {
     check("제목에 할 일 개수", (await txt("#pageTitle")) === `오늘 할 일 ${titles.length}가지`);
     const gwIdx = titles.findIndex((t) => t.startsWith("글라스월드"));
     await (await p.$$("#todayTasks [data-task]"))[gwIdx].click(); await wait(300);
-    check("발주하기 → 그 업체 발주서", (await txt(".vendor-card.active .vendor-name")) === "글라스월드");
+    check("발주하기 → 그 업체 발주서", (await txt(".order-vendor-current")).startsWith("글라스월드"));
     await p.keyboard.press("Escape"); await wait(150);
     const btns = await p.$$eval("#todayTasks [data-task]", (b) => b.map((x) => x.textContent.trim()));
     await (await p.$$("#todayTasks [data-task]"))[btns.indexOf("입고 처리")].click(); await wait(300);

@@ -178,7 +178,8 @@ textarea.input { resize: vertical; line-height: 1.6; }
 }
 
 /* ── 목록 ───────────────────────────────── */
-.list-card { position: relative; overflow: hidden; }
+.list-card { position: relative; overflow: clip; }
+.list-sticky { position: sticky; top: var(--topbar-h, 0px); z-index: 10; background: var(--surface); }
 .toolbar {
   display: flex;
   align-items: center;
@@ -401,7 +402,8 @@ textarea.input { resize: vertical; line-height: 1.6; }
   margin: 0 -28px -28px;
   padding: 2px 28px 28px;
 }
-.manager-pane .bulk-bar { top: 0; }
+/* 붙어 있는 동안 둥근 모서리와 위쪽 틈으로 아래 목록이 비치지 않게 바탕색으로 둘러싼다 */
+.manager-pane .bulk-bar { top: 0; box-shadow: 0 -2px 0 8px var(--surface); }
 .modal-fixed h3, .modal-fixed .modal-desc, .modal-fixed .tabs { flex-shrink: 0; }
 .modal-fixed .guide-tabs { align-self: flex-start; }
 .manager-tabs { display: inline-flex; align-self: flex-start; margin: 4px 0 18px; }
@@ -956,4 +958,37 @@ textarea.input { resize: vertical; line-height: 1.6; }
   .topbar-inner { padding: 10px 16px; }
   .page-head h1 { font-size: 1.45rem; }
   .modal { padding: 22px 18px; border-radius: 16px; }
+}
+
+/* 목록 줄 고치기: 고친 줄 표시 */
+.vendor-edit-row.dirty, .label-edit-row.dirty { background: var(--warn-soft); border-color: #f0d49a; }
+.row-save-btn { min-width: 76px; }
+.dirty-flash { animation: dirtyFlash 0.4s ease-in-out 3; }
+@keyframes dirtyFlash { 50% { border-color: var(--warn); box-shadow: 0 0 0 3px #f6e2b8; } }
+
+/* 발주서 품목 화면: 위쪽 고정, 품목만 스크롤 */
+.modal.order-fixed { display: flex; flex-direction: column; overflow: hidden; }
+.order-fixed > #orderBody { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.order-top { flex-shrink: 0; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.order-vendor-line { display: flex; align-items: center; gap: 8px; margin: 10px 0 12px; }
+.order-vendor-current { font-weight: 700; font-size: 1.02rem; }
+.order-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 10px 10px 16px; }
+.order-bar .order-summary { flex: 1; color: var(--ink-2); font-size: 0.92rem; }
+.order-pane { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -28px -28px; padding: 16px 28px 28px; }
+@media (max-width: 520px) {
+  .order-pane { margin: 0 -18px -22px; padding: 14px 18px 22px; }
+}
+.order-fixed .order-table { overflow: clip; }
+.order-fixed .order-head { position: sticky; top: -16px; z-index: 1; }
+.order-vendor-line .order-add { margin: 0 0 0 auto; width: min(320px, 100%); }
+.order-vendor-line .order-add .input { width: 100%; }
+.order-vendor-line .order-add-results { position: absolute; left: 0; right: 0; top: 100%; z-index: 5; background: var(--surface); box-shadow: var(--shadow); }
+.order-vendor-line { flex-wrap: wrap; }
+.order-row.just-added { animation: justAdded 1.6s ease-out; }
+@keyframes justAdded { 0%, 40% { background: var(--brand-soft); } }
+.order-top .record-bar { margin-top: 0; }
+.order-vendor-line .spacer { flex: 1; }
+.order-vendor-line a.btn-primary { text-decoration: none; }
+@media (max-width: 520px) {
+  .list-sticky { position: static; } /* 좁은 화면에서는 붙이면 목록 볼 자리가 너무 줄어든다 */
 }
