@@ -51,25 +51,43 @@ function once(key, fn) {
   return p;
 }
 
+// 캐시가 지났어도 이 시간 안에 받은 데이터면 바로 돌려주고, 네이버에서는 뒤에서 새로 받아 둔다.
+// (발주 완료로 처리 · 입고 처리 뒤 목록을 다시 그릴 때 네이버 조회 10초 넘게 기다리지 않게)
+const STALE_OK_MS = 30 * 60 * 1000;
+
+function refreshInBackground(key, fn) {
+  once(key, fn).catch((err) => console.error("네이버 데이터 새로 받기 실패 (이전 데이터로 보여줘요):", err.message.split("\n")[0]));
+}
+
 async function getCachedProducts() {
   const now = Date.now();
-  if (productsCache.data && productsCache.expiresAt > now) return productsCache.data;
-  return once("products", async () => {
+  const load = async () => {
     const data = await naverClient.fetchProducts();
     productsCache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
     return data;
-  });
+  };
+  if (productsCache.data && productsCache.expiresAt > now) return productsCache.data;
+  if (productsCache.data && productsCache.expiresAt - CACHE_TTL_MS + STALE_OK_MS > now) {
+    refreshInBackground("products", load);
+    return productsCache.data;
+  }
+  return once("products", load);
 }
 
 async function getCachedOrders(days) {
   const now = Date.now();
   const cached = ordersCacheByDays.get(days);
-  if (cached && cached.expiresAt > now) return cached.data;
-  return once(`orders:${days}`, async () => {
+  const load = async () => {
     const data = await naverClient.fetchRecentOrders(days);
     ordersCacheByDays.set(days, { data, expiresAt: Date.now() + CACHE_TTL_MS });
     return data;
-  });
+  };
+  if (cached && cached.expiresAt > now) return cached.data;
+  if (cached && cached.expiresAt - CACHE_TTL_MS + STALE_OK_MS > now) {
+    refreshInBackground(`orders:${days}`, load);
+    return cached.data;
+  }
+  return once(`orders:${days}`, load);
 }
 
 // 서버가 켜지자마자 네이버 데이터를 미리 받아둔다. 바탕화면 아이콘이 화면을 여는 몇 초 사이에
