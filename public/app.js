@@ -14,6 +14,7 @@ let currentLabels = [];
 let currentVendors = [];
 let hasAutoOpenedLabelPopup = false;
 let activeTab = "reorder";
+const picked = new Set(); // 첫 화면에서 체크한 품목 (발주 완료로 처리용)
 
 
 const $ = (id) => document.getElementById(id);
@@ -150,7 +151,10 @@ function spikeNoteHtml(p) {
 }
 
 // "발주함 50개 · 10/5 예정" (예정일이 지나면 "입고 지연")
-function pendingChip(po) {
+function pendingChip(p) {
+  const po = p.pendingOrder;
+  // 최근 재고가 늘어서 자동 입고된 품목: 혹시 반품이었으면 발주 기록에서 되돌릴 수 있게 며칠 보여준다
+  if (!po && p.recentAutoReceipt) return `<span class="pending-chip arrived" title="스마트스토어 재고가 늘어서 자동으로 입고 처리했어요. 들어온 게 아니면 발주 기록에서 되돌려 주세요">자동 입고됨 · ${shortDate(p.recentAutoReceipt.receivedAt)}</span>`;
   if (!po) return "";
   const late = isLate(po.expectedAt);
   return `<span class="pending-chip ${late ? "late" : ""}" title="${daysAgoText(po.orderedAt)} 발주">${late ? "입고 지연" : "발주함"} ${po.qty}개 · ${shortDate(po.expectedAt)} 예정</span>`;
@@ -238,6 +242,10 @@ function todayDateText() {
 
 function buildTodayTasks(products) {
   const tasks = [];
+  const alerts = currentData?.alerts || {};
+
+  // 발주 메일을 만들어 복사했는데 '발주 완료로 처리'를 안 한 업체 (깜빡하면 같은 품목을 또 발주할 수 있음)
+  for (const d of alerts.drafts || []) tasks.push({ kind: "draft", draft: d });
 
   // 업체별 발주 (발주 필요 품목이 있는 업체만)
   const byVendor = new Map();
@@ -261,9 +269,12 @@ function buildTodayTasks(products) {
   });
   tasks.push(...vendorTasks);
 
-  // 입고 지연
+  // 입고 지연 (네이버 재고가 늘면 서버가 자동으로 입고 처리하므로, 여기 남은 건 아직 재고가 안 늘어난 발주)
   const late = products.filter((p) => p.pendingOrder && isLate(p.pendingOrder.expectedAt));
   if (late.length) tasks.push({ kind: "receive", items: late });
+
+  // 입고 처리했는데 스마트스토어 재고를 안 올린 품목 (올리지 않으면 발주 필요로 다시 뜸)
+  if (alerts.stockNotRaised?.length) tasks.push({ kind: "stock", items: alerts.stockNotRaised });
 
   // 발주가 필요한데 업체가 없는 품목
   const noVendor = products.filter((p) => p.needsReorder && !p.vendorId);
@@ -294,6 +305,36 @@ function todayTaskHtml(t, i) {
         <div class="task-actions"><button class="btn-primary" data-task="${i}">발주서 만들기</button></div>
       </div>`;
   }
+  if (t.kind === "draft") {
+    const d = t.draft;
+    const total = d.items.reduce((sum, it) => sum + Number(it.qty || 0), 0);
+    const when = new Date(d.createdAt);
+    const whenText = `${shortDate(d.createdAt)} ${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
+    return `
+      <div class="task-card task-small task-draft">
+        <span class="task-icon warn">${TASK_ICONS.order}</span>
+        <div class="task-title">
+          <strong>보낸 발주 메일, 처리할까요? · ${escapeHtml(vendorById(d.vendorId)?.name || d.vendorName)}</strong>
+          <span>${whenText}에 메일을 만들었는데 '발주 완료로 처리'를 안 했어요 (${d.items.length}품목 · ${total}개). 보냈다면 처리해야 같은 품목을 또 발주하지 않아요</span>
+        </div>
+        <div class="task-buttons">
+          <button class="btn-ghost btn-sm" data-task-alt="${i}">안 보냈어요</button>
+          <button class="btn-primary btn-sm" data-task="${i}">발주 완료로 처리</button>
+        </div>
+      </div>`;
+  }
+  if (t.kind === "stock") {
+    const first = t.items[0];
+    return `
+      <div class="task-card task-small">
+        <span class="task-icon warn">${TASK_ICONS.receive}</span>
+        <div class="task-title">
+          <strong>스마트스토어 재고를 올렸나요? · ${t.items.length}품목</strong>
+          <span>입고 처리했는데 네이버 재고가 그대로예요 (${escapeHtml(first.name)}${t.items.length > 1 ? ` 외 ${t.items.length - 1}품목` : ""}). 재고를 올려야 발주 계산이 맞아요</span>
+        </div>
+        <button class="btn-outline btn-sm" data-task-alt="${i}">이미 올렸어요</button>
+      </div>`;
+  }
   if (t.kind === "receive") {
     const vendors = [...new Set(t.items.map((p) => p.vendor?.name).filter(Boolean))];
     const who = vendors.length ? `${vendors[0]}${vendors.length > 1 ? ` 외 ${vendors.length - 1}곳` : ""} · ` : "";
@@ -302,7 +343,7 @@ function todayTaskHtml(t, i) {
         <span class="task-icon warn">${TASK_ICONS.receive}</span>
         <div class="task-title">
           <strong>입고 확인 · 지연 ${t.items.length}품목</strong>
-          <span>${escapeHtml(who)}입고 예정일이 지났어요. 들어왔으면 입고 처리해 주세요</span>
+          <span>${escapeHtml(who)}입고 예정일이 지났는데 스마트스토어 재고가 아직 안 늘었어요</span>
         </div>
         <button class="btn-outline btn-sm" data-task="${i}">입고 처리</button>
       </div>`;
@@ -333,10 +374,37 @@ function renderTodayTasks() {
     const t = tasks[Number(btn.dataset.task)];
     btn.addEventListener("click", () => {
       if (t.kind === "order") openOrder({ vendorId: t.vendor.id });
+      else if (t.kind === "draft") taskAction(btn, () => postJson(`/api/order-drafts/${encodeURIComponent(t.draft.vendorId)}/record`, "POST", {}), "발주 완료로 처리했어요");
       else if (t.kind === "receive") openOrders();
       else openVendorManager("assign");
     });
   });
+  box.querySelectorAll("[data-task-alt]").forEach((btn) => {
+    const t = tasks[Number(btn.dataset.taskAlt)];
+    btn.addEventListener("click", () => {
+      if (t.kind === "draft") {
+        confirmClick(btn, "한 번 더 누르면 지우기", () =>
+          taskAction(btn, () => fetchJson(`/api/order-drafts/${encodeURIComponent(t.draft.vendorId)}`, { method: "DELETE" }), "알림을 지웠어요"));
+      } else if (t.kind === "stock") {
+        taskAction(btn, () => Promise.all(t.items.map((it) =>
+          postJson(`/api/orders/${encodeURIComponent(it.orderId)}/items/${encodeURIComponent(it.productId)}/stock-checked`, "POST", {}))), "확인했어요");
+      }
+    });
+  });
+}
+
+// 할 일 카드의 버튼: 서버에 반영하고 목록을 다시 불러온다
+async function taskAction(btn, fn, message) {
+  btn.disabled = true;
+  try {
+    await fn();
+  } catch (err) {
+    btn.disabled = false;
+    toast(err.message || "처리하지 못했어요.", "error");
+    return;
+  }
+  toast(message);
+  await loadProducts();
 }
 
 function renderLoadError(message) {
@@ -344,7 +412,6 @@ function renderLoadError(message) {
   $("todayDate").textContent = todayDateText();
   $("pageTitle").textContent = "오늘 할 일";
   $("productList").innerHTML = `<div class="empty-note error-note"><strong>품목을 불러오지 못했어요</strong>${escapeHtml(message)}</div>`;
-  for (const id of ["statReorder", "statSoon", "statAll", "statUnlabeled"]) $(id).textContent = "–";
   $("criteriaText").textContent = "네이버 데이터를 불러오지 못했어요. 잠시 후 새로고침을 눌러주세요.";
 }
 
@@ -355,14 +422,7 @@ function render() {
   renderLabelFilterOptions();
 
   const products = data.products;
-  const reorder = products.filter((p) => p.needsReorder);
-  const soon = products.filter(isSoon);
   const unlabeledCount = getUnlabeledProducts().length;
-
-  $("statReorder").textContent = reorder.length;
-  $("statSoon").textContent = soon.length;
-  $("statAll").textContent = products.length;
-  $("statUnlabeled").textContent = unlabeledCount;
 
   const badge = $("labelCountBadge");
   badge.hidden = unlabeledCount === 0;
@@ -417,16 +477,149 @@ function renderList() {
   const emptyText = {
     reorder: "<strong>지금 발주가 필요한 품목이 없어요</strong>재고가 넉넉해요.",
     soon: "<strong>곧 발주가 필요한 품목이 없어요</strong>",
-    pending: "<strong>입고를 기다리는 품목이 없어요</strong>발주서를 보낸 뒤 '발주 완료로 기록'을 누르면 여기에 나와요.",
+    pending: "<strong>입고를 기다리는 품목이 없어요</strong>발주서에서, 또는 품목을 체크해서 '발주 완료로 처리'를 누르면 여기에 나와요.",
     all: "<strong>조건에 맞는 품목이 없어요</strong>",
   }[activeTab];
   const cards = listView === "cards";
   $("productList").classList.toggle("cards-view", cards);
   $("tableHead").hidden = cards;
   document.querySelectorAll(".view-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === listView));
+  for (const id of picked) if (!currentData.products.some((p) => p.id === id)) picked.delete(id);
+  visibleIds = list.map((p) => p.id);
   $("productList").innerHTML = list.length
     ? list.map(cards ? cardHtml : rowHtml).join("")
     : `<div class="empty-note">${query || labelFilter !== "all" ? "<strong>조건에 맞는 품목이 없어요</strong>검색어나 라벨 필터를 확인해주세요." : emptyText}</div>`;
+  updatePickBar();
+}
+
+// ── 첫 화면에서 바로 발주 기록 ─────────────────────
+// 전화 · 카톡처럼 발주서 없이 주문한 품목을 체크해서 "발주함"으로 기록한다.
+// 업체별로 나눠 기록하고, 업체가 없는 품목은 "업체 미지정"으로 기록한다.
+
+let visibleIds = []; // 지금 목록에 보이는 품목 (전체 선택용)
+
+function updatePickBar() {
+  const n = picked.size;
+  $("pickBar").hidden = n === 0;
+  $("pickCount").textContent = n;
+  const all = $("pickAll");
+  const shown = visibleIds.filter((id) => picked.has(id)).length;
+  all.checked = visibleIds.length > 0 && shown === visibleIds.length;
+  all.indeterminate = shown > 0 && shown < visibleIds.length;
+}
+
+function setPicked(id, on) {
+  if (on) picked.add(id); else picked.delete(id);
+  const el = document.querySelector(`#productList [data-id="${CSS.escape(id)}"]`);
+  if (el) {
+    el.classList.toggle("picked", on);
+    el.querySelector(".pick-check").checked = on;
+  }
+  updatePickBar();
+}
+
+// 업체가 등록돼 있으면 그 업체, 아니면 "" (업체 미지정)
+function recordVendorKey(p) {
+  return p.vendorId && vendorById(p.vendorId) ? p.vendorId : "";
+}
+
+const quickRecord = { items: [] }; // [{ id, qty }]
+
+function openQuickRecord(ids) {
+  quickRecord.items = ids.map(productById).filter(Boolean).map((p) => ({ id: p.id, qty: Math.max(1, p.recommendedOrderQty || 0) }));
+  if (!quickRecord.items.length) return;
+  renderQuickRecord();
+  openModal("quickRecordOverlay");
+}
+
+function quickRecordSummary() {
+  const total = quickRecord.items.reduce((sum, it) => sum + it.qty, 0);
+  return `${quickRecord.items.length}개 품목 · 총 <b>${total}</b>개`;
+}
+
+function renderQuickRecord() {
+  const groups = new Map(); // 업체 → [{ it, p }]
+  for (const it of quickRecord.items) {
+    const p = productById(it.id);
+    const key = recordVendorKey(p);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ it, p });
+  }
+  $("quickRecordBody").innerHTML = `
+    <h3>발주 완료로 처리</h3>
+    <p class="modal-desc">전화 · 카톡 등으로 이미 주문한 품목을 기록해요. 기록하면 '입고 대기'로 표시되고 발주 필요에서 빠져요. 메일은 보내지 않아요.</p>
+    ${[...groups.entries()].map(([vid, rows]) => `
+      <div class="qr-group">
+        <div class="qr-vendor">${vid ? escapeHtml(vendorById(vid).name) : "업체 미지정"} <span class="muted small">${rows.length}개 품목</span></div>
+        ${rows.map(({ it, p }) => `
+          <div class="qr-row" data-qr-id="${escapeHtml(p.id)}">
+            <span class="qr-name">
+              <span class="name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+              ${p.pendingOrder ? `<span class="pending-note">이미 발주함 · ${daysAgoText(p.pendingOrder.orderedAt)} ${p.pendingOrder.qty}개</span>` : ""}
+            </span>
+            <span class="num"><input class="input qr-qty" type="number" min="1" value="${it.qty}" aria-label="발주 수량" />개</span>
+            <button type="button" class="btn-ghost btn-sm qr-remove" title="이 품목 빼기">빼기</button>
+          </div>`).join("")}
+      </div>`).join("")}
+    <div class="order-footer">
+      <span class="order-summary" id="qrSummary">${quickRecordSummary()}</span>
+      <button class="btn-ghost" data-close-quick>취소</button>
+      <button class="btn-primary" id="qrSubmit">발주 완료로 처리</button>
+    </div>
+  `;
+  document.querySelectorAll("#quickRecordBody .qr-row").forEach((row) => {
+    const it = quickRecord.items.find((x) => x.id === row.dataset.qrId);
+    row.querySelector(".qr-qty").addEventListener("input", (e) => {
+      const n = Math.floor(Number(e.target.value));
+      it.qty = Number.isFinite(n) && n > 0 ? n : 0;
+      $("qrSummary").innerHTML = quickRecordSummary();
+    });
+    row.querySelector(".qr-remove").addEventListener("click", () => {
+      quickRecord.items = quickRecord.items.filter((x) => x !== it);
+      if (!quickRecord.items.length) { closeModal("quickRecordOverlay"); return; }
+      renderQuickRecord();
+    });
+  });
+  document.querySelector("#quickRecordBody [data-close-quick]").addEventListener("click", () => closeModal("quickRecordOverlay"));
+  $("qrSubmit").addEventListener("click", submitQuickRecord);
+}
+
+async function submitQuickRecord() {
+  if (quickRecord.items.some((it) => !(it.qty > 0))) {
+    toast("수량을 1 이상으로 입력해주세요.", "error");
+    return;
+  }
+  const btn = $("qrSubmit");
+  btn.disabled = true;
+  const groups = new Map();
+  for (const it of quickRecord.items) {
+    const p = productById(it.id);
+    const key = recordVendorKey(p);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ productId: p.id, name: p.name, vendorItemName: p.supplier?.vendorItemName || "", qty: it.qty, leadTimeDays: p.leadTimeDays, stockAtOrder: p.stockQuantity });
+  }
+  let done = 0;
+  try {
+    for (const [vendorId, items] of groups) {
+      await postJson("/api/orders", "POST", { vendorId, items, direct: true });
+      done += items.length;
+      for (const i of items) picked.delete(i.productId);
+      quickRecord.items = quickRecord.items.filter((it) => !items.some((i) => i.productId === it.id));
+    }
+  } catch (err) {
+    toast(err.message || "기록하지 못했어요.", "error");
+    if (done) {
+      // 일부 업체만 기록됐으면 남은 품목만 다시 보여준다 (두 번 기록 방지)
+      await loadProducts();
+      renderQuickRecord();
+    } else {
+      btn.disabled = false;
+    }
+    return;
+  }
+  closeModal("quickRecordOverlay");
+  toast(`${done}개 품목을 발주 완료로 처리했어요`);
+  await loadProducts();
 }
 
 // ── 사진으로 보기 (품목 카드) ───────────────────────
@@ -466,14 +659,15 @@ function cardHtml(p) {
     : `<div class="card-photo-empty"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="M21 16l-5-5-8 9"></path></svg><span>사진 준비 중</span></div>`;
   const qty = p.recommendedOrderQty;
   return `
-    <button class="product-card" data-id="${escapeHtml(p.id)}">
+    <div class="product-card ${picked.has(p.id) ? "picked" : ""}" data-id="${escapeHtml(p.id)}" role="button" tabindex="0">
       <div class="card-photo" style="background:${tint};">
         ${photo}
+        <label class="pick" title="선택"><input type="checkbox" class="pick-check" ${picked.has(p.id) ? "checked" : ""} aria-label="선택" /></label>
         <span class="status ${s.level} card-status">${s.text}</span>
       </div>
       <div class="card-body">
         <div class="card-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
-        <div class="product-sub">${labelChip(p.label)}${pendingChip(p.pendingOrder)}${spikeChip(p)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
+        <div class="product-sub">${p.label ? labelChip(p.label) : ""}${pendingChip(p)}${spikeChip(p)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
         <div class="card-stock">
           <div class="card-stock-text"><span>재고 ${p.stockQuantity}개</span><span>하루 ${p.dailyVelocity}개</span></div>
           <div class="stock-bar"><div class="stock-bar-fill ${s.level}" style="width:${stockBarPercent(p)}%;"></div></div>
@@ -485,7 +679,7 @@ function cardHtml(p) {
             : p.needsReorder ? `<div class="card-rec"><span>권장 발주</span><span class="qty-manual">직접 정하기</span></div>` : `<div class="card-rec none">발주 필요 없음</div>`}
         </div>
       </div>
-    </button>`;
+    </div>`;
 }
 
 // 보기 방식(표 / 사진)은 PC 에 저장해서 다음에 켜도 그대로
@@ -515,16 +709,17 @@ function rowHtml(p) {
   const s = statusOf(p);
   const qty = p.recommendedOrderQty;
   return `
-    <button class="product-row" data-id="${escapeHtml(p.id)}">
+    <div class="product-row ${picked.has(p.id) ? "picked" : ""}" data-id="${escapeHtml(p.id)}" role="button" tabindex="0">
+      <label class="pick" title="선택"><input type="checkbox" class="pick-check" ${picked.has(p.id) ? "checked" : ""} aria-label="선택" /></label>
       <div>
         <div class="product-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
-        <div class="product-sub">${labelChip(p.label)}${pendingChip(p.pendingOrder)}${spikeChip(p)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
+        <div class="product-sub">${p.label ? labelChip(p.label) : ""}${pendingChip(p)}${spikeChip(p)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
       </div>
       <div class="num"><span class="cell-label">재고</span>${p.stockQuantity}개</div>
       <div class="num"><span class="cell-label">일평균 판매</span>${p.dailyVelocity}개</div>
       <div class="status-cell"><span class="status ${s.level}">${s.text}</span></div>
       <div class="num"><span class="cell-label">권장 발주</span>${qty > 0 ? `<span class="qty-strong">${qty}개</span>` : p.needsReorder ? `<span class="qty-manual">직접 정하기</span>` : `<span class="qty-zero">–</span>`}</div>
-    </button>
+    </div>
   `;
 }
 
@@ -569,7 +764,7 @@ function openDetail(productId) {
       <div class="detail-meta">
         <span class="status ${s.level}">${s.text}</span>
         ${labelChip(p.label)}
-        ${pendingChip(p.pendingOrder)}
+        ${pendingChip(p)}
         <span>품목 ID ${escapeHtml(p.id)}</span>
       </div>
     </div>
@@ -610,13 +805,22 @@ function openDetail(productId) {
     </div>
 
     <div class="detail-footer">
-      <button class="btn-outline" id="saveSupplier">저장</button>
+      <span class="autosave-note" id="detailSaveState">바꾸면 바로 저장돼요</span>
+      <button class="btn-outline" id="recordFromDetail" title="전화 · 카톡 등으로 이미 주문했을 때">발주 완료로 처리</button>
       <button class="btn-primary" id="orderFromDetail">이 업체에 발주서 만들기</button>
     </div>
   `;
 
-  $("saveSupplier").addEventListener("click", () => saveSupplier(p.id));
+  for (const id of ["detailVendor", "detailLabel", "productLeadTime", "vendorItemName"]) {
+    $(id).addEventListener("change", () => saveSupplier(p.id));
+  }
+  $("productLeadTime").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+  $("vendorItemName").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
   $("detailOpenVendors").addEventListener("click", () => { closeModal("detailOverlay"); openVendorManager("list"); });
+  $("recordFromDetail").addEventListener("click", () => {
+    closeModal("detailOverlay");
+    openQuickRecord([p.id]);
+  });
   $("orderFromDetail").addEventListener("click", () => {
     closeModal("detailOverlay");
     // 저장하지 않고 고른 업체라도 그 업체로 발주서를 연다
@@ -632,15 +836,22 @@ async function saveSupplier(productId) {
     leadTimeDays: $("productLeadTime").value,
     labelId: $("detailLabel").value,
   };
+  $("detailSaveState").textContent = "저장 중…";
   try {
     await postJson(`/api/suppliers/${productId}`, "POST", payload);
   } catch (err) {
+    $("detailSaveState").textContent = "저장하지 못했어요";
     toast(err.message || "저장에 실패했어요.", "error");
     return;
   }
+  // 다시 그려도 입력하던 칸은 그대로 (다음 칸으로 넘어가던 중이면 그 칸에)
+  const focusedId = document.activeElement?.id;
   await loadProducts();
+  if ($("detailOverlay").hidden) return;
   openDetail(productId);
-  toast("저장했어요");
+  $("detailSaveState").textContent = "저장했어요 ✓";
+  $("detailSaveState").classList.add("saved");
+  if (focusedId && $(focusedId)) $(focusedId).focus();
 }
 
 function fillTemplate(template, values) {
@@ -944,35 +1155,49 @@ function bindOrderEvents() {
 }
 
 // 발주서로 만든 품목·수량을 발주 기록으로 남긴다 (입고 대기 표시, 중복 발주 방지)
+function orderRecordItems() {
+  return selectedOrderLines().map(({ p, item }) => ({
+    productId: p.id,
+    name: p.name,
+    vendorItemName: p.supplier?.vendorItemName || "",
+    qty: item.qty,
+    leadTimeDays: p.leadTimeDays,
+    stockAtOrder: p.stockQuantity,
+  }));
+}
+
+// 메일을 복사하거나 메일 창을 열면 "보내려는 발주서"로 저장해 둔다.
+// '발주 완료로 처리'를 깜빡하면 첫 화면 '오늘 할 일'에 알림이 뜬다 (처리하면 서버가 지운다).
+async function saveOrderDraft() {
+  if (order.recorded || order.draftSaved) return;
+  order.draftSaved = true;
+  try {
+    await postJson("/api/order-drafts", "POST", { vendorId: order.vendorId, items: orderRecordItems() });
+  } catch {
+    order.draftSaved = false; // 저장 못 해도 메일 쓰기는 계속
+  }
+}
+
 async function recordCurrentOrder() {
   const btn = $("orderRecord");
   const lines = selectedOrderLines();
   if (!lines.length || order.recorded) return;
   btn.disabled = true;
   try {
-    await postJson("/api/orders", "POST", {
-      vendorId: order.vendorId,
-      items: lines.map(({ p, item }) => ({
-        productId: p.id,
-        name: p.name,
-        vendorItemName: p.supplier?.vendorItemName || "",
-        qty: item.qty,
-        leadTimeDays: p.leadTimeDays,
-      })),
-    });
+    await postJson("/api/orders", "POST", { vendorId: order.vendorId, items: orderRecordItems() });
   } catch (err) {
     btn.disabled = false;
     toast(err.message || "기록하지 못했어요.", "error");
     return;
   }
   order.recorded = true;
-  toast(`${lines.length}개 품목의 발주를 기록했어요`);
+  toast(`${lines.length}개 품목을 발주 완료로 처리했어요`);
   // 메일 화면에서 고친 내용이 지워지지 않게, 발주서 창은 다시 그리지 않고 기록 영역만 바꾼다
   const bar = btn.closest(".record-bar");
   bar.classList.add("done");
-  bar.querySelector("strong").textContent = "발주를 기록했어요";
+  bar.querySelector("strong").textContent = "발주 완료로 처리했어요";
   bar.querySelector(".record-text span").textContent = "이 품목들은 '입고 대기'로 표시돼요. 입고되면 '발주 기록'에서 입고 완료를 눌러주세요.";
-  btn.textContent = "기록됨 ✓";
+  btn.textContent = "처리됨 ✓";
   await loadProducts();
 }
 
@@ -990,10 +1215,10 @@ function renderOrderMail() {
     </div>
     <div class="record-bar ${order.recorded ? "done" : ""}">
       <div class="record-text">
-        <strong>${order.recorded ? "발주를 기록했어요" : "메일을 보냈으면 기록해 두세요"}</strong>
+        <strong>${order.recorded ? "발주 완료로 처리했어요" : "메일을 보냈으면 발주 완료로 처리해 주세요"}</strong>
         <span>${order.recorded ? "이 품목들은 '입고 대기'로 표시돼요. 입고되면 '발주 기록'에서 입고 완료를 눌러주세요." : "기록하면 '입고 대기'로 표시되고, 같은 품목을 또 발주하지 않게 알려줘요."}</span>
       </div>
-      <button class="btn-primary" id="orderRecord" ${order.recorded ? "disabled" : ""}>${order.recorded ? "기록됨 ✓" : "발주 완료로 기록"}</button>
+      <button class="btn-primary" id="orderRecord" ${order.recorded ? "disabled" : ""}>${order.recorded ? "처리됨 ✓" : "발주 완료로 처리"}</button>
     </div>
     </div>
     <div class="order-pane">
@@ -1001,7 +1226,7 @@ function renderOrderMail() {
       <li>위 <b>네이버 메일 열기</b>를 눌러 메일 쓰기 화면을 열어요.</li>
       <li>아래 <b>받는 사람 · 제목 · 본문</b>을 차례로 <b>복사</b>해서 붙여넣어요.</li>
       <li>내용을 확인하고 네이버 메일에서 <b>보내기</b>를 눌러요.</li>
-      <li>보냈으면 위 <b>발주 완료로 기록</b>을 눌러요.</li>
+      <li>보냈으면 위 <b>발주 완료로 처리</b>를 눌러요.</li>
     </ol>
     <div class="mail-field">
       <div class="mail-field-head"><span>받는 사람</span><button type="button" class="btn-outline btn-sm" data-copy="orderTo">복사</button></div>
@@ -1019,8 +1244,11 @@ function renderOrderMail() {
     </div>
   `;
   $("orderRecord").addEventListener("click", recordCurrentOrder);
+  order.draftSaved = false; // 품목을 다시 골랐을 수 있으니 이 메일 화면에서 다시 저장
+  $("orderOpenNaver").addEventListener("click", saveOrderDraft);
   document.querySelectorAll("[data-copy]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      saveOrderDraft();
       const ok = await copyText($(btn.dataset.copy).value);
       if (!ok) { toast("복사하지 못했어요. 직접 선택해서 복사해주세요.", "error"); return; }
       btn.textContent = "복사됨 ✓";
@@ -1030,6 +1258,7 @@ function renderOrderMail() {
   });
   $("orderBack").addEventListener("click", () => { order.step = "items"; renderOrder(); });
   $("orderMailto").addEventListener("click", () => {
+    saveOrderDraft();
     window.location.href = `mailto:${encodeURIComponent($("orderTo").value.trim())}?subject=${encodeURIComponent($("orderSubject").value)}&body=${encodeURIComponent($("orderMailBody").value)}`;
   });
 }
@@ -1457,7 +1686,7 @@ function renderOrders() {
     return `
       <div class="order-card ${done ? "done" : ""}" data-order-id="${escapeHtml(o.id)}">
         <div class="order-card-head">
-          <strong>${escapeHtml(vendorById(o.vendorId)?.name || o.vendorName)}</strong>
+          <strong>${escapeHtml(vendorById(o.vendorId)?.name || o.vendorName || "업체 미지정")}</strong>${o.direct ? `<span class="direct-badge" title="발주서 없이 첫 화면에서 기록">직접 기록</span>` : ""}
           <span class="muted small">${shortDate(o.createdAt)} 발주 · ${daysAgoText(o.createdAt)} · ${o.items.length}개 품목</span>
           <span class="status ${done ? "ok" : received ? "warn" : "none"}">${done ? "입고 완료" : `입고 ${received}/${o.items.length}`}</span>
           <span class="spacer"></span>
@@ -1469,10 +1698,10 @@ function renderOrders() {
             const late = !i.receivedAt && isLate(i.expectedAt);
             return `
             <div class="order-item" data-product-id="${escapeHtml(i.productId)}">
-              <span class="name">${escapeHtml(i.name)}${i.vendorItemName ? `<small>업체용: ${escapeHtml(i.vendorItemName)}</small>` : ""}</span>
-              <span class="num">${i.qty}개</span>
+              <span class="name">${escapeHtml(i.name)}${i.vendorItemName ? `<small>업체용: ${escapeHtml(i.vendorItemName)}</small>` : ""}${i.autoReceived ? `<small class="arrived-note">스마트스토어 재고가 늘어서 자동 입고 (${i.stockAtOrder}개 → ${i.stockAtReceive}개)</small>` : ""}</span>
+              <span class="num">${i.receivedAt ? `${i.qty}개` : `<input class="input order-item-qty" type="number" min="1" value="${i.qty}" aria-label="발주 수량" />개`}</span>
               <span class="order-item-state ${i.receivedAt ? "received" : late ? "late" : ""}">${i.receivedAt ? `입고 ${shortDate(i.receivedAt)}` : late ? `입고 지연 (${shortDate(i.expectedAt)} 예정)` : `${shortDate(i.expectedAt)} 입고 예정`}</span>
-              ${i.receivedAt ? `<button class="btn-ghost btn-sm" data-unreceive>되돌리기</button>` : `<button class="btn-outline btn-sm" data-receive>입고</button>`}
+              <span class="order-item-actions">${i.receivedAt ? `<button class="btn-ghost btn-sm" data-unreceive>되돌리기</button>` : `<button class="btn-outline btn-sm" data-receive>입고</button><button class="btn-danger-ghost btn-sm" data-remove-item>빼기</button>`}</span>
             </div>`;
           }).join("")}
         </div>
@@ -1482,7 +1711,7 @@ function renderOrders() {
   const keepTop = paneScrollBefore("ordersBody", `${s.tab}|${s.vendor}`);
   $("ordersBody").innerHTML = `
     <h3>발주 기록</h3>
-    <p class="modal-desc">발주서에서 '발주 완료로 기록'한 내용이에요. 물건이 들어오면 <b>입고</b>를 눌러주세요. 입고 전까지는 발주한 수량을 들어올 재고로 계산해서, 같은 품목이 다시 '발주 필요'로 뜨지 않아요.</p>
+    <p class="modal-desc">발주서나 첫 화면에서 '발주 완료로 처리'한 내용이에요. 물건이 들어와 <b>스마트스토어 재고를 올리면 자동으로 입고 처리</b>돼요. 수량이 틀렸으면 그 칸을 고치고, 잘못 넣은 품목은 <b>빼기</b>를 누르세요.</p>
     <div class="orders-toolbar">
       <div class="tabs manager-tabs" role="tablist">
         <button type="button" class="tab ${s.tab === "pending" ? "active" : ""}" data-orders-tab="pending">입고 대기 ${open.length ? `<span class="dot-badge">${open.length}</span>` : ""}</button>
@@ -1491,11 +1720,11 @@ function renderOrders() {
       ${vendorIds.length > 1 ? `
         <select id="ordersVendorFilter" class="input" aria-label="업체">
           <option value="all">모든 업체</option>
-          ${vendorIds.map((id) => `<option value="${escapeHtml(id)}" ${s.vendor === id ? "selected" : ""}>${escapeHtml(vendorById(id)?.name || all.find((o) => o.vendorId === id).vendorName)}</option>`).join("")}
+          ${vendorIds.map((id) => `<option value="${escapeHtml(id)}" ${s.vendor === id ? "selected" : ""}>${escapeHtml(vendorById(id)?.name || all.find((o) => o.vendorId === id).vendorName || "업체 미지정")}</option>`).join("")}
         </select>` : ""}
     </div>
     <div class="manager-pane" data-view="${s.tab}|${s.vendor}">
-      ${list.length ? cards : `<div class="empty-note">${s.tab === "pending" ? "<strong>입고를 기다리는 발주가 없어요</strong>발주서를 보낸 뒤 '발주 완료로 기록'을 누르면 여기에 나와요." : "<strong>발주 기록이 없어요</strong>"}</div>`}
+      ${list.length ? cards : `<div class="empty-note">${s.tab === "pending" ? "<strong>입고를 기다리는 발주가 없어요</strong>발주서를 보낸 뒤 '발주 완료로 처리'를 누르면 여기에 나와요." : "<strong>발주 기록이 없어요</strong>"}</div>`}
     </div>
   `;
 
@@ -1529,6 +1758,16 @@ function renderOrders() {
         act(() => postJson(`/api/orders/${id}/receive`, "POST", { productIds: [productId] }), "입고 완료로 표시했어요"));
       row.querySelector("[data-unreceive]")?.addEventListener("click", () =>
         act(() => postJson(`/api/orders/${id}/unreceive`, "POST", { productId }), "입고 표시를 되돌렸어요"));
+      const qty = row.querySelector(".order-item-qty");
+      qty?.addEventListener("change", () => {
+        const n = Math.floor(Number(qty.value));
+        if (!(n > 0)) { toast("수량은 1 이상으로 입력해주세요.", "error"); qty.value = qty.defaultValue; return; }
+        act(() => postJson(`/api/orders/${id}/items/${encodeURIComponent(productId)}`, "PUT", { qty: n }), "발주 수량을 고쳤어요");
+      });
+      qty?.addEventListener("keydown", (e) => { if (e.key === "Enter") qty.blur(); });
+      const remove = row.querySelector("[data-remove-item]");
+      remove?.addEventListener("click", () =>
+        confirmClick(remove, "한 번 더 누르면 빼기", () => act(() => fetchJson(`/api/orders/${id}/items/${encodeURIComponent(productId)}`, { method: "DELETE" }), "품목을 발주 기록에서 뺐어요")));
     });
   });
 }
@@ -1831,7 +2070,6 @@ $("openLabelManager").addEventListener("click", () => openLabelManager());
 $("openVendorManager").addEventListener("click", () => openVendorManager());
 $("openOrderBtn").addEventListener("click", () => openOrder());
 $("openOrdersBtn").addEventListener("click", () => openOrders());
-$("statUnlabeledCard").addEventListener("click", () => openLabelManager("assign"));
 $("openMailTemplate").addEventListener("click", openMailTemplate);
 $("mtLangTabs").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-template-lang]");
@@ -1856,9 +2094,25 @@ document.querySelectorAll("[data-tab]").forEach((el) => {
 $("searchInput").addEventListener("input", renderList);
 $("labelFilter").addEventListener("change", renderList);
 $("productList").addEventListener("click", (e) => {
+  if (e.target.closest(".pick")) return; // 체크 칸은 아래 change 에서 처리 (상세를 열지 않음)
   const row = e.target.closest(".product-row, .product-card");
   if (row) openDetail(row.dataset.id);
 });
+$("productList").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("pick-check")) return;
+  setPicked(e.target.closest("[data-id]").dataset.id, e.target.checked);
+});
+$("productList").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.target.closest(".pick")) return;
+  const row = e.target.closest(".product-row, .product-card");
+  if (row) openDetail(row.dataset.id);
+});
+$("pickAll").addEventListener("change", (e) => {
+  for (const id of visibleIds) if (e.target.checked) picked.add(id); else picked.delete(id);
+  renderList();
+});
+$("pickClear").addEventListener("click", () => { picked.clear(); renderList(); });
+$("pickRecord").addEventListener("click", () => openQuickRecord([...picked]));
 document.querySelectorAll(".view-btn").forEach((b) => {
   b.addEventListener("click", () => setListView(b.dataset.view));
 });

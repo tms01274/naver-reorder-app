@@ -95,9 +95,17 @@ async function captureScreens(url) {
   await wait(300);
   await p.click('.tab[data-tab="reorder"]');
 
-  await p.click(".product-row");
+  await p.click(".product-row .product-name");
   await shot("03-detail");
   await closeAll();
+
+  // 체크해서 발주 완료로 처리 (확인 창만 찍고 기록은 안 함)
+  const picks = await p.$$("#productList .pick");
+  await picks[0].click(); if (picks[1]) await picks[1].click();
+  await p.click("#pickRecord");
+  await shot("16-quick");
+  await closeAll();
+  await p.click("#pickClear");
 
   await p.click("#openOrderBtn");
   await wait(200);

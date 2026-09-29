@@ -7,7 +7,11 @@ const { execFile } = require("child_process");
 const { computeReorderList } = require("./src/reorderLogic");
 const { getAllSuppliers, upsertSupplier, clearFieldFromAll, setFieldForProducts, migrateSuppliers } = require("./src/suppliers");
 const { getAllVendors, createVendor, updateVendor, deleteVendor, migrateLegacySupplierFields } = require("./src/vendors");
-const { listOrders, createOrder, receiveOrder, unreceiveItem, deleteOrder, pendingByProduct } = require("./src/orders");
+const {
+  listOrders, createOrder, receiveOrder, unreceiveItem, updateItemQty, removeItem, deleteOrder, pendingByProduct,
+  autoReceiveArrived, recentAutoReceipts, receivedButStockNotRaised, markStockChecked,
+} = require("./src/orders");
+const { listDrafts, getDraft, saveDraft, deleteDraft } = require("./src/orderDrafts");
 const { getTemplates, saveTemplate, getSenderNames, PLACEHOLDERS, LANGUAGES, LANG_CODES } = require("./src/mailTemplate");
 const { getAllLabels, createLabel, updateLabel, deleteLabel } = require("./src/inboundLabels");
 const { readSettings, saveSettings } = require("./src/settings");
@@ -159,7 +163,15 @@ app.get("/api/products", async (req, res) => {
       if (effective !== undefined && effective !== null) leadTimeOverrides[pid] = Number(effective);
     }
 
+    // 발주 뒤 네이버 재고가 (팔린 만큼 빼고도) 늘어난 품목은 자동으로 입고 처리 (사람은 스마트스토어 재고만 올리면 됨)
+    const stockById = Object.fromEntries(products.map((p) => [p.id, p.stockQuantity]));
+    const soldSince = (productId, sinceIso) => {
+      const t = new Date(sinceIso).getTime();
+      return orders.reduce((sum, o) => (o.productId === productId && o.orderedAt && new Date(o.orderedAt).getTime() >= t ? sum + o.quantity : sum), 0);
+    };
+    autoReceiveArrived(stockById, soldSince);
     const pending = pendingByProduct();
+    const autoReceipts = recentAutoReceipts();
     const daily = dailySalesByProduct(orders, settings.lookbackDays);
     const list = computeReorderList(products, orders, settings, leadTimeOverrides).map((p) => {
       const supplierInfo = suppliers[p.id] || null;
@@ -167,6 +179,7 @@ app.get("/api/products", async (req, res) => {
       const vendorId = supplierInfo?.vendorId && vendors[supplierInfo.vendorId] ? supplierInfo.vendorId : null;
       return {
         ...applyPendingOrder(p, pending[p.id]),
+        recentAutoReceipt: autoReceipts[p.id] || null,
         supplier: supplierInfo,
         labelId,
         label: labelId ? { id: labelId, ...labels[labelId] } : null,
@@ -181,6 +194,11 @@ app.get("/api/products", async (req, res) => {
       settings,
       mockMode: MOCK_MODE,
       products: list,
+      // 깜빡했을 때 재고 계산이 틀어질 수 있는 것들 → 첫 화면 '오늘 할 일'에 알림
+      alerts: {
+        drafts: listDrafts(),
+        stockNotRaised: receivedButStockNotRaised(stockById, soldSince),
+      },
       labels: Object.entries(labels).map(([id, l]) => ({ id, ...l })),
       vendors: Object.entries(vendors).map(([id, v]) => ({ id, ...v })),
     });
@@ -353,29 +371,67 @@ app.get("/api/orders", (req, res) => {
   res.json(listOrders());
 });
 
-// 발주서 화면의 "발주 완료로 기록"
-// body: { vendorId, items: [{ productId, name, vendorItemName?, qty, leadTimeDays }] }
-app.post("/api/orders", (req, res) => {
-  const { vendorId, items } = req.body;
-  const vendor = getAllVendors()[vendorId];
-  if (!vendor) return res.status(400).json({ error: "업체를 찾을 수 없어요." });
-  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: "기록할 품목이 없어요." });
+// 발주 기록에 넣을 품목 정리. 잘못된 값이 있으면 { error }
+function cleanOrderItems(items) {
+  if (!Array.isArray(items) || !items.length) return { error: "기록할 품목이 없어요." };
   const now = Date.now();
   const clean = [];
   for (const it of items) {
     const qty = Math.floor(Number(it.qty));
-    if (!it.productId || !(qty > 0)) return res.status(400).json({ error: "품목과 수량을 확인해주세요." });
+    if (!it.productId || !(qty > 0)) return { error: "품목과 수량을 확인해주세요." };
     const lead = Number.isFinite(Number(it.leadTimeDays)) && Number(it.leadTimeDays) >= 0 ? Number(it.leadTimeDays) : 7;
     clean.push({
       productId: String(it.productId),
       name: String(it.name || it.productId),
       ...(it.vendorItemName ? { vendorItemName: String(it.vendorItemName) } : {}),
       qty,
+      // 발주할 때의 네이버 재고. 나중에 재고가 늘면 자동으로 입고 처리한다
+      ...(Number.isFinite(Number(it.stockAtOrder)) && it.stockAtOrder !== null && it.stockAtOrder !== "" ? { stockAtOrder: Number(it.stockAtOrder) } : {}),
       // 입고 예정일 = 발주일 + 그 품목의 리드타임
       expectedAt: new Date(now + lead * 24 * 60 * 60 * 1000).toISOString(),
     });
   }
-  res.json(createOrder({ vendorId, vendorName: vendor.name, items: clean }));
+  return { items: clean };
+}
+
+// 발주서 화면 · 첫 화면의 "발주 완료로 처리" (direct = 발주서 없이 첫 화면에서, 업체 없이도 가능)
+// body: { vendorId, direct?, items: [{ productId, name, vendorItemName?, qty, leadTimeDays, stockAtOrder? }] }
+app.post("/api/orders", (req, res) => {
+  const { vendorId, items, direct } = req.body;
+  const vendor = vendorId ? getAllVendors()[vendorId] : null;
+  if (vendorId && !vendor) return res.status(400).json({ error: "업체를 찾을 수 없어요." });
+  if (!vendorId && !direct) return res.status(400).json({ error: "업체를 찾을 수 없어요." });
+  const cleaned = cleanOrderItems(items);
+  if (cleaned.error) return res.status(400).json({ error: cleaned.error });
+  if (vendorId) deleteDraft(vendorId); // 그 업체의 "처리 안 한 발주서" 알림은 끝
+  res.json(createOrder({ vendorId: vendorId || "", vendorName: vendor ? vendor.name : "업체 미지정", items: cleaned.items, direct: !!direct }));
+});
+
+// 메일 화면에서 복사 · 메일 열기를 누르면 저장 (발주 완료로 처리를 깜빡했을 때 알려주려고)
+app.post("/api/order-drafts", (req, res) => {
+  const { vendorId, items } = req.body || {};
+  const vendor = getAllVendors()[vendorId];
+  if (!vendor) return res.status(400).json({ error: "업체를 찾을 수 없어요." });
+  const cleaned = cleanOrderItems(items);
+  if (cleaned.error) return res.status(400).json({ error: cleaned.error });
+  // 예정일은 처리할 때 다시 계산하므로, 받은 그대로(리드타임 포함) 저장
+  res.json(saveDraft(vendorId, { vendorName: vendor.name, items }));
+});
+
+// 알림에서 "발주 완료로 처리" → 저장해 둔 발주서로 기록
+app.post("/api/order-drafts/:vendorId/record", (req, res) => {
+  const draft = getDraft(req.params.vendorId);
+  if (!draft) return res.status(404).json({ error: "이미 처리했거나 없는 발주서예요." });
+  const cleaned = cleanOrderItems(draft.items);
+  if (cleaned.error) return res.status(400).json({ error: cleaned.error });
+  deleteDraft(req.params.vendorId);
+  res.json(createOrder({ vendorId: draft.vendorId, vendorName: getAllVendors()[draft.vendorId]?.name || draft.vendorName, items: cleaned.items }));
+});
+
+// 알림에서 "안 보냈어요"
+app.delete("/api/order-drafts/:vendorId", (req, res) => {
+  deleteDraft(req.params.vendorId);
+  res.json({ ok: true });
 });
 
 // 입고 처리 (productIds 없으면 그 발주 전체)
@@ -389,6 +445,28 @@ app.post("/api/orders/:id/receive", (req, res) => {
 // 입고 처리 되돌리기
 app.post("/api/orders/:id/unreceive", (req, res) => {
   const saved = unreceiveItem(req.params.id, String(req.body?.productId || ""));
+  if (!saved) return res.status(404).json({ error: "발주 기록을 찾을 수 없어요." });
+  res.json(saved);
+});
+
+// "입고했는데 네이버 재고가 그대로예요" 알림에서 "이미 올렸어요"
+app.post("/api/orders/:id/items/:productId/stock-checked", (req, res) => {
+  const saved = markStockChecked(req.params.id, req.params.productId);
+  if (!saved) return res.status(404).json({ error: "발주 기록을 찾을 수 없어요." });
+  res.json(saved);
+});
+
+// 기록한 품목의 수량 고치기 / 품목 빼기
+app.put("/api/orders/:id/items/:productId", (req, res) => {
+  const qty = Math.floor(Number(req.body?.qty));
+  if (!(qty > 0)) return res.status(400).json({ error: "수량은 1 이상으로 입력해주세요." });
+  const saved = updateItemQty(req.params.id, req.params.productId, qty);
+  if (!saved) return res.status(404).json({ error: "발주 기록을 찾을 수 없어요." });
+  res.json(saved);
+});
+
+app.delete("/api/orders/:id/items/:productId", (req, res) => {
+  const saved = removeItem(req.params.id, req.params.productId);
   if (!saved) return res.status(404).json({ error: "발주 기록을 찾을 수 없어요." });
   res.json(saved);
 });

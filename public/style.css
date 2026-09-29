@@ -212,12 +212,12 @@ textarea.input { resize: vertical; line-height: 1.6; }
 
 .table-head, .product-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 80px 100px 150px 90px;
+  grid-template-columns: 28px minmax(0, 1fr) 80px 100px 150px 90px;
   gap: 16px;
   align-items: center;
 }
 .table-head {
-  padding: 10px 20px;
+  padding: 10px 20px 10px 12px;
   font-size: 0.76rem;
   font-weight: 600;
   color: var(--faint);
@@ -229,7 +229,7 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .product-list { min-height: 120px; }
 .product-row {
   width: 100%;
-  padding: 14px 20px;
+  padding: 14px 20px 14px 12px;
   border: none;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
@@ -790,7 +790,7 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .order-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
 .order-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 60px 160px 84px;
+  grid-template-columns: minmax(0, 1fr) 92px 150px auto;
   gap: 12px;
   align-items: center;
   padding: 9px 14px;
@@ -805,6 +805,7 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .order-item-state.late { color: var(--warn); font-weight: 700; }
 @media (max-width: 860px) {
   .order-item { grid-template-columns: 1fr auto; }
+  .order-item-actions { grid-column: 1 / -1; justify-content: flex-end; }
   .order-item-state { grid-column: 1; }
 }
 
@@ -937,7 +938,9 @@ textarea.input { resize: vertical; line-height: 1.6; }
     grid-template-columns: 1fr 1fr 1fr;
     gap: 8px 12px;
   }
-  .product-row > :first-child { grid-column: 1 / -1; }
+  .product-row { position: relative; padding-left: 48px; }
+  .product-row > .pick { position: absolute; left: 12px; top: 12px; }
+  .product-row > :nth-child(2) { grid-column: 1 / -1; }
   .product-row .cell-label { display: block; font-size: 0.72rem; color: var(--faint); font-weight: 600; }
   .product-row .num { text-align: left; }
   .product-row .status-cell { grid-column: 1 / -1; }
@@ -992,3 +995,79 @@ textarea.input { resize: vertical; line-height: 1.6; }
 @media (max-width: 520px) {
   .list-sticky { position: static; } /* 좁은 화면에서는 붙이면 목록 볼 자리가 너무 줄어든다 */
 }
+
+/* ── 첫 화면에서 체크해서 발주함으로 기록 ── */
+.pick { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: -4px 0; cursor: pointer; border-radius: 8px; }
+.pick:hover { background: var(--surface-2); }
+.pick input { width: 17px; height: 17px; accent-color: var(--ink); cursor: pointer; }
+.product-row.picked { background: var(--brand-soft); }
+.product-row.picked:hover { background: #e6eafd; }
+.card-photo .pick { position: absolute; top: 8px; right: 8px; margin: 0; background: rgba(255, 255, 255, 0.92); box-shadow: var(--shadow-sm); }
+.product-card.picked { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand); }
+.pick-bar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  font-size: 0.92rem;
+  white-space: nowrap;
+}
+body:has(#pickBar:not([hidden])) .toast-host { bottom: 96px; }
+body:has(#pickBar:not([hidden])) .page { padding-bottom: 110px; }
+.qr-group { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
+.qr-vendor { padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--line); font-weight: 700; font-size: 0.92rem; }
+.qr-row { display: grid; grid-template-columns: minmax(0, 1fr) 100px auto; gap: 10px; align-items: center; padding: 9px 14px; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
+.qr-row:last-child { border-bottom: none; }
+.qr-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qr-name .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.qr-qty, .order-item-qty { width: 64px; padding: 6px 8px; text-align: right; margin-right: 4px; }
+.order-item-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.direct-badge { font-size: 0.72rem; font-weight: 700; color: var(--muted); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 8px; }
+
+/* 재고가 늘어서 자동 입고된 품목 */
+.order-item .name small.arrived-note { color: var(--ok); white-space: normal; }
+.pending-chip.arrived { color: var(--ok); background: var(--ok-soft); }
+.task-buttons { display: flex; gap: 6px; flex-shrink: 0; }
+@media (max-width: 520px) {
+  .task-small:has(.task-buttons) { flex-wrap: wrap; }
+  .task-small .task-buttons { width: 100%; justify-content: flex-end; }
+}
+.task-draft { flex-wrap: wrap; }
+.task-draft .task-title { flex: 1 1 calc(100% - 60px); }
+.task-draft .task-buttons { width: 100%; justify-content: flex-end; }
+
+/* ── 간결하게 다듬기 ── */
+/* 메뉴 숫자: 급한 알림이 아니라 참고용이라 차분하게 */
+.nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: 2px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); font-size: 0.72rem; font-weight: 700; }
+/* 할 일 카드가 옆 카드 높이에 맞춰 늘어나지 않게 */
+.today-tasks { align-items: start; }
+/* 품목 상세 자동 저장 안내 */
+.autosave-note { margin-right: auto; font-size: 0.8rem; color: var(--faint); }
+.autosave-note.saved { color: var(--ok); font-weight: 600; }
+@media (max-width: 860px) {
+  /* 메뉴는 한 줄로, 넘치면 옆으로 밀어서 */
+  .top-actions { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+  .top-actions::-webkit-scrollbar { display: none; }
+  .top-actions > button { white-space: nowrap; flex-shrink: 0; }
+  /* 탭 글자가 두 줄로 깨지지 않게 */
+  .toolbar .tabs { width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .toolbar .tabs .tab { white-space: nowrap; flex: 1 0 auto; justify-content: center; }
+  /* 품목 한 줄을 짧게: 이름 / 재고 · 하루 판매 · 상태 · 권장 */
+  .product-row { grid-template-columns: auto auto 1fr auto; gap: 6px 12px; align-items: center; }
+  .product-row > :nth-child(2) { grid-column: 1 / -1; }
+  .product-row .num { text-align: left; font-size: 0.82rem; color: var(--ink-2); }
+  .product-row .cell-label { display: inline; font-size: 0.72rem; margin-right: 3px; }
+  .product-row .status-cell { grid-column: auto; justify-self: end; }
+  .product-row > .num:last-child { text-align: right; }
+  .product-row > .num:last-child .cell-label { display: none; }
+}
+.product-sub:empty { display: none; }

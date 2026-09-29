@@ -9,13 +9,15 @@
 - 브랜드명: **아틀리에 말리** (화면 제목/헤더에 사용). 바탕화면 아이콘 이름은 알아보기 쉽게 "재고 발주 도우미" 유지.
 - 사용자: 매장 PC 를 쓰는 **비개발자**(버튼이 많으면 어려워함). 관리자(저장소 주인)는 원격으로 GitHub push 만으로 배포.
 - 사용자와의 대화·화면 문구는 **한국어**, 화면 문구는 쉬운 해요체.
+- **모니터링 우선** (관리자 지시): 사용자가 버튼을 눌러 관리하게 하기보다, 네이버 데이터를 보고 프로그램이 알아서 따라가게 만든다. 사람은 잘못된 것만 고치게(되돌리기). 예: 발주 뒤 스마트스토어 재고가 늘면 자동 입고 처리.
 
 ## 구조
 
 | 경로 | 내용 |
 |---|---|
 | `server.js` | Express 서버. `/api/products`(네이버 상품+주문 → 발주 계산, 3분 캐시, `?fresh=1` 로 캐시 무시), `/api/suppliers/:id`(품목의 vendorId·labelId·리드타임), `/api/labels`·`/api/vendors`(+`/assign` 일괄 지정), `/api/mail-template`, `/api/whats-new`(+`/seen`), `/docs` 정적 제공 |
-| `src/orders.js` | 발주 기록(`data/orders.json`). 입고 안 된 수량은 `/api/products` 에서 들어올 재고로 더해 발주 필요·권장 수량을 다시 계산(`applyPendingOrder`). 입고 처리해도 네이버 재고는 사람이 올려야 함 |
+| `src/orders.js` | 발주 기록(`data/orders.json`). 입고 안 된 수량은 `/api/products` 에서 들어올 재고로 더해 발주 필요·권장 수량을 다시 계산(`applyPendingOrder`). 발주할 때 네이버 재고(`stockAtOrder`)를 남겨 두고, 팔린 수량을 빼고도 재고가 발주 수량의 절반 이상 늘면 **자동 입고**(`autoReceiveArrived`, 되돌리면 `noAuto`). 사람이 입고를 눌렀는데 재고가 안 늘면 알림(`receivedButStockNotRaised`) |
+| `src/orderDrafts.js` | 메일을 복사했는데 '발주 완료로 처리'를 안 한 발주서(`data/order-drafts.json`, 업체별). 첫 화면 '오늘 할 일'에 알림, 처리하면 지워짐 |
 | `src/vendors.js` | 거래 업체(이름·이메일). 서버 시작 시 예전 품목별 업체명/이메일을 업체 목록으로 옮김 |
 | 발주 흐름 | 화면의 "발주서 만들기": 업체 선택 → 그 업체 품목(발주 필요는 미리 체크)·수량 수정 → 메일 한 통 분량 생성 → 받는 사람·제목·본문 각각 복사해 **네이버 웹메일**에 붙여넣기 (매장은 웹메일 사용, 앱이 직접 발송하지 않음). 메일 양식은 `{{품목목록}}` 필수 |
 | 해외 업체 | 업체마다 발주서 언어(`lang`: ko/en/zh). 메일 양식은 언어별(`src/mailTemplate.js` 의 `DEFAULT_TEMPLATES`, 자리표시자는 언어 상관없이 한글 키). 품목별 `vendorItemName`(업체용 품명)이 있으면 발주서에 그 이름 사용 — 자동 번역은 하지 않음. 보내는 사람: `SENDER_NAME`(ko) / `SENDER_NAME_EN`(en·zh) |
@@ -43,7 +45,7 @@
    있으면 작업 내용을 보존한 채 받아서 합친다 (`git stash` → `git merge --ff-only origin/main` 또는 `git pull --rebase` → `git stash pop`, 충돌은 양쪽 변경을 모두 살려서 해결). 받은 내용을 사용자에게 한 줄로 알린다.
 2. **지난 push 이후 추가·수정된 기능의 테스트 묶음만** 돌린다 (관리자 지시: 전체 테스트는 오래 걸림). `cd docs/tools && node e2e-test.js <묶음...>` — 묶음 목록은 `node e2e-test.js --list`.
    - 새 기능/바뀐 동작은 해당 묶음에 검사를 추가·수정한 뒤 그 묶음을 돌린다. 한 번 통과하면 된다 (여러 번 반복하지 않음).
-   - 어느 묶음인지: 라벨 관리 → `labels`, 첫 화면 목록·통계 → `main`, 업체 관리 → `vendors`, 발주서 → `order`, 발주 기록·입고 대기 → `records`, 품목 상세 → `detail`, 해외 업체·언어 → `overseas`, 판단 기준 → `settings`, 메일 양식 → `template`, 가이드·업데이트 기록 → `whatsnew`, 데이터 형식·옮기기 → `migration`, 오늘 할 일 카드·표/사진 보기 → `today`, 네이버 응답 해석(`src/naverClient.js`) → `naver`, 공통 화면(팝업 구조, CSS, id) → `layout`.
+   - 어느 묶음인지: 라벨 관리 → `labels`, 첫 화면 목록·통계 → `main`, 업체 관리 → `vendors`, 발주서 → `order`, 발주 기록·입고 대기 → `records`, 품목 상세 → `detail`, 해외 업체·언어 → `overseas`, 판단 기준 → `settings`, 메일 양식 → `template`, 가이드·업데이트 기록 → `whatsnew`, 데이터 형식·옮기기 → `migration`, 오늘 할 일 카드·표/사진 보기 → `today`, 네이버 응답 해석(`src/naverClient.js`) → `naver`, 첫 화면 발주 완료 처리·자동 입고·깜빡 알림(`src/orders.js`, `src/orderDrafts.js`) → `monitor`, 공통 화면(팝업 구조, CSS, id) → `layout`.
    - 여러 화면이 함께 쓰는 코드(`fetchJson`, `render`, 공통 팝업, `server.js` 의 `/api/products` 등)를 고쳤을 때만 전체(`node e2e-test.js`)를 돌린다.
 3. **지난 push 이후 바뀐 프로그램 내용을 한꺼번에 `src/changelog.js` 맨 위에 정리**한다. 관리자가 따로 말하지 않아도 매번 한다.
    - 매장 PC 사용자(비개발자)가 읽는 글: 쉬운 해요체, 무엇이 달라졌고 어떻게 쓰는지 위주. 내부 구조·파일명·버그 원인 같은 개발 용어는 쓰지 않는다.
