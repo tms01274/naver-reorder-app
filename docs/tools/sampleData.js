@@ -4,5 +4,22 @@ const products = names.map((name,i)=>({ id: String(2001+i), name, stockQuantity:
 const vel = [1.8,0.9,0.4,1.1,0.3,1.4,2.5,0.6,0.8,0.7,1.2,0,0.5,1.6,0.2,0.9,0.4,0.3];
 module.exports = {
   fetchProducts: async () => products,
-  fetchRecentOrders: async (days) => { const o=[]; products.forEach((p,i)=>{ const q=Math.round(vel[i]*days); if(q>0) o.push({productId:p.id,quantity:q,orderedAt:new Date().toISOString()}); }); return o; },
+  // 기간 동안 팔린 총량은 그대로 두고(판매 속도 계산이 달라지지 않게), 날짜별로 들쭉날쭉 나눠서 판매 그래프가 자연스럽게 보이게 한다
+  fetchRecentOrders: async (days) => {
+    const o = [];
+    const now = Date.now();
+    products.forEach((p, i) => {
+      const total = Math.round(vel[i] * days);
+      if (total <= 0) return;
+      const w = Array.from({ length: days }, (_, d) => 1 + 0.6 * Math.sin((d + 1) * (i + 2) * 0.7) + (d / days) * (i % 3 === 0 ? 0.8 : 0));
+      const sum = w.reduce((a, b) => a + b, 0);
+      const per = w.map((x) => Math.floor((x / sum) * total));
+      let left = total - per.reduce((a, b) => a + b, 0);
+      for (let d = days - 1; left > 0; d = (d - 1 + days) % days, left--) per[d]++;
+      per.forEach((q, d) => {
+        if (q > 0) o.push({ productId: p.id, quantity: q, orderedAt: new Date(now - (days - 1 - d) * 864e5).toISOString() });
+      });
+    });
+    return o;
+  },
 };

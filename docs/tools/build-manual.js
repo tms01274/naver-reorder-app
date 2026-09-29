@@ -85,6 +85,14 @@ async function captureScreens(url) {
   await shot("02-search", { x: 0, y: 280, width: 1280, height: 420 });
   await p.click("#searchInput", { clickCount: 3 });
   await p.keyboard.press("Backspace");
+  // 사진으로 보기 (전체 탭, 목록 부분만)
+  await p.click('.view-btn[data-view="cards"]');
+  await wait(500);
+  // clip 은 페이지 기준 좌표라 스크롤하지 않고 목록 위치로 자른다
+  const listTop = await p.evaluate(() => document.querySelector(".list-card").getBoundingClientRect().top + window.scrollY);
+  await shot("15-cards", { x: 0, y: Math.max(0, listTop - 16), width: 1280, height: 760 });
+  await p.click('.view-btn[data-view="table"]');
+  await wait(300);
   await p.click('.tab[data-tab="reorder"]');
 
   await p.click(".product-row");

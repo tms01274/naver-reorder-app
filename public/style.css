@@ -486,6 +486,139 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .placeholder-chips button:hover { border-color: var(--ink-2); }
 .placeholder-chips code { font-family: inherit; font-weight: 700; }
 
+/* ── 오늘 할 일 ─────────────────────────── */
+.page-date { margin: 0 0 2px; font-size: 0.88rem; font-weight: 600; color: var(--muted); }
+.today-tasks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+.today-tasks:empty { display: none; }
+.task-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 18px 20px;
+}
+.task-order { display: flex; flex-direction: column; gap: 14px; }
+.task-small { display: flex; align-items: center; gap: 12px; }
+.task-empty { grid-column: 1 / -1; }
+.task-head { display: flex; align-items: center; gap: 10px; }
+.task-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.task-icon.danger { color: var(--danger); background: var(--danger-soft); }
+.task-icon.warn { color: var(--warn); background: var(--warn-soft); }
+.task-icon.brand { color: var(--brand); background: var(--brand-soft); }
+.task-icon.ok { color: var(--ok); background: var(--ok-soft); }
+.task-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.task-title strong { font-size: 1.02rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.task-title span { font-size: 0.82rem; color: var(--muted); }
+.task-items { display: flex; flex-direction: column; gap: 6px; font-size: 0.86rem; color: var(--ink-2); }
+.task-item { display: flex; justify-content: space-between; gap: 12px; }
+.task-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-item.more { color: var(--muted); }
+.task-item-status { font-weight: 700; white-space: nowrap; }
+.task-item-status.danger { color: var(--danger); }
+.task-item-status.warn { color: var(--warn); }
+.task-item-status.ok { color: var(--ok); }
+.task-actions { display: flex; justify-content: flex-end; margin-top: auto; }
+
+/* 할 일 아래로 내려간 요약 카드는 작게 */
+.stats-compact { gap: 10px; margin-bottom: 16px; }
+.stats-compact .stat { flex-direction: row; align-items: center; justify-content: space-between; padding: 10px 14px; }
+.stats-compact .stat-value { font-size: 1.25rem; }
+.stats-compact .stat:hover { transform: none; }
+
+@media (max-width: 860px) {
+  .today-tasks { grid-template-columns: minmax(0, 1fr); }
+  .page-head { flex-wrap: wrap; align-items: flex-start; }
+  .page-head-actions { width: 100%; }
+}
+
+/* ── 표 / 사진 보기 ─────────────────────── */
+.view-toggle { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 2px; }
+.view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.view-btn:hover { color: var(--ink); }
+.view-btn.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(20, 20, 30, 0.1); }
+
+.product-list.cards-view {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px;
+  background: var(--surface-2);
+}
+.product-list.cards-view .empty-note { grid-column: 1 / -1; }
+.product-card {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 0.88rem;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.product-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.card-photo { position: relative; height: 128px; display: flex; align-items: center; justify-content: center; }
+.card-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card-photo-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgba(24, 25, 27, 0.35); font-size: 0.72rem; font-weight: 600; }
+.card-status { position: absolute; top: 10px; left: 10px; }
+.card-body { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; flex: 1; }
+.card-name {
+  font-weight: 600;
+  line-height: 1.4;
+  min-height: 2.8em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card-body .product-sub { margin-top: -4px; flex-wrap: wrap; }
+.card-stock { display: flex; flex-direction: column; gap: 5px; }
+.card-stock-text { display: flex; justify-content: space-between; font-size: 0.76rem; color: var(--muted); }
+.stock-bar { height: 6px; background: #f0efec; border-radius: 999px; overflow: hidden; }
+.stock-bar-fill { height: 6px; border-radius: 999px; background: var(--faint); }
+.stock-bar-fill.danger { background: var(--danger); }
+.stock-bar-fill.warn { background: var(--warn); }
+.stock-bar-fill.ok { background: var(--ok); }
+.card-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: auto; }
+.card-spark { display: flex; flex-direction: column; gap: 2px; font-size: 0.72rem; color: var(--faint); }
+.card-rec { display: flex; flex-direction: column; align-items: flex-end; font-size: 0.72rem; color: var(--faint); }
+.card-rec strong { font-size: 1.2rem; font-weight: 800; letter-spacing: -0.03em; color: var(--ink); }
+.card-rec.none { font-size: 0.78rem; }
+
+@media (max-width: 1100px) {
+  .product-list.cards-view { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .product-list.cards-view { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; gap: 10px; }
+  .card-photo { height: 104px; }
+}
+@media (max-width: 520px) {
+  .product-list.cards-view { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ── 업체 · 발주서 ──────────────────────── */
 .page-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .vendor-chip {
@@ -615,6 +748,21 @@ textarea.input { resize: vertical; line-height: 1.6; }
 }
 .pending-chip.late { color: var(--warn); background: var(--warn-soft); }
 .pending-note { font-size: 0.74rem; color: var(--brand); font-weight: 600; }
+.spike-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: 999px;
+  padding: 1px 8px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.spike-note { font-size: 0.74rem; color: var(--warn); font-weight: 600; }
+.qty-manual { font-size: 0.8rem; font-weight: 700; color: var(--warn); white-space: nowrap; }
+.detail-head + .detail-stats + .warn-box, .detail-stats + .warn-box { margin-top: 10px; }
 .count-pill { font-size: 0.72rem; font-weight: 700; color: var(--brand); background: var(--brand-soft); border-radius: 999px; padding: 1px 8px; }
 
 .record-bar {

@@ -53,7 +53,8 @@
 
     <section class="page-head">
       <div>
-        <h1>오늘의 발주</h1>
+        <p class="page-date" id="todayDate"></p>
+        <h1 id="pageTitle">오늘 할 일</h1>
         <p class="page-sub" id="criteriaText">데이터를 불러오는 중이에요</p>
       </div>
       <div class="page-head-actions">
@@ -63,7 +64,10 @@
       </div>
     </section>
 
-    <section class="stats">
+    <!-- 오늘 할 일: 업체별 발주 · 입고 지연 · 업체 없는 품목 (데이터로 자동 생성) -->
+    <section id="todayTasks" class="today-tasks"></section>
+
+    <section class="stats stats-compact">
       <button class="stat stat-danger" data-tab="reorder">
         <span class="stat-label">지금 발주 필요</span>
         <span class="stat-value" id="statReorder">–</span>
@@ -95,10 +99,20 @@
           <select id="labelFilter" class="input">
             <option value="all">모든 라벨</option>
           </select>
+          <div class="view-toggle" role="group" aria-label="보기 방식">
+            <button type="button" class="view-btn active" data-view="table" title="표로 보기">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+              표
+            </button>
+            <button type="button" class="view-btn" data-view="cards" title="사진으로 보기">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"></rect></svg>
+              사진
+            </button>
+          </div>
         </div>
       </div>
 
-      <div class="table-head">
+      <div class="table-head" id="tableHead">
         <span>품목</span>
         <span class="num">재고</span>
         <span class="num">일평균 판매</span>

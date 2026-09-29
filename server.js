@@ -37,21 +37,44 @@ const CACHE_TTL_MS = 3 * 60 * 1000;
 let productsCache = { data: null, expiresAt: 0 };
 const ordersCacheByDays = new Map(); // lookbackDays -> { data, expiresAt }
 
+// 같은 요청이 이미 진행 중이면 새로 부르지 않고 그 결과를 같이 기다린다
+// (서버 시작 직후 미리 불러오는 중에 화면 요청이 들어와도 네이버를 두 번 부르지 않게)
+const inflight = new Map();
+function once(key, fn) {
+  if (inflight.has(key)) return inflight.get(key);
+  const p = fn().finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
 async function getCachedProducts() {
   const now = Date.now();
   if (productsCache.data && productsCache.expiresAt > now) return productsCache.data;
-  const data = await naverClient.fetchProducts();
-  productsCache = { data, expiresAt: now + CACHE_TTL_MS };
-  return data;
+  return once("products", async () => {
+    const data = await naverClient.fetchProducts();
+    productsCache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
+    return data;
+  });
 }
 
 async function getCachedOrders(days) {
   const now = Date.now();
   const cached = ordersCacheByDays.get(days);
   if (cached && cached.expiresAt > now) return cached.data;
-  const data = await naverClient.fetchRecentOrders(days);
-  ordersCacheByDays.set(days, { data, expiresAt: now + CACHE_TTL_MS });
-  return data;
+  return once(`orders:${days}`, async () => {
+    const data = await naverClient.fetchRecentOrders(days);
+    ordersCacheByDays.set(days, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+    return data;
+  });
+}
+
+// 서버가 켜지자마자 네이버 데이터를 미리 받아둔다. 바탕화면 아이콘이 화면을 여는 몇 초 사이에
+// 주문 조회(하루 단위로 여러 번 호출, 10초 안팎)가 거의 끝나 있어서 첫 화면이 빨리 뜬다.
+function warmUpCache() {
+  const { lookbackDays } = getSettings();
+  Promise.all([getCachedProducts(), getCachedOrders(lookbackDays)]).catch((err) => {
+    console.error("시작할 때 네이버 데이터 미리 받기 실패 (화면을 열면 다시 시도해요):", err.message.split("\n")[0]);
+  });
 }
 
 // 빈 값·숫자 아님·최솟값 미만이면 undefined (= 이 값은 무시)
@@ -97,6 +120,21 @@ function applyPendingOrder(p, pending) {
   };
 }
 
+// 주문 내역을 품목별 · 날짜별 판매량으로 센다. { [productId]: [n일 전, …, 오늘] }
+function dailySalesByProduct(orders, days) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const startMs = start.getTime() - (days - 1) * 86400000;
+  const result = {};
+  for (const o of orders) {
+    if (!o.orderedAt) continue;
+    const idx = Math.floor((new Date(o.orderedAt).getTime() - startMs) / 86400000);
+    if (idx < 0 || idx >= days) continue;
+    (result[o.productId] ||= new Array(days).fill(0))[idx] += o.quantity;
+  }
+  return result;
+}
+
 // 재주문 필요 품목 리스트 (+ 전체 품목)
 app.get("/api/products", async (req, res) => {
   try {
@@ -122,6 +160,7 @@ app.get("/api/products", async (req, res) => {
     }
 
     const pending = pendingByProduct();
+    const daily = dailySalesByProduct(orders, settings.lookbackDays);
     const list = computeReorderList(products, orders, settings, leadTimeOverrides).map((p) => {
       const supplierInfo = suppliers[p.id] || null;
       const labelId = supplierInfo?.labelId && labels[supplierInfo.labelId] ? supplierInfo.labelId : null;
@@ -133,6 +172,8 @@ app.get("/api/products", async (req, res) => {
         label: labelId ? { id: labelId, ...labels[labelId] } : null,
         vendorId,
         vendor: vendorId ? { id: vendorId, ...vendors[vendorId] } : null,
+        // 사진 보기의 판매 그래프용: 판매 속도 계산 기간 동안 날짜별 판매량 (오래된 날 → 오늘)
+        dailySales: daily[p.id] || new Array(settings.lookbackDays).fill(0),
       };
     });
 
@@ -369,6 +410,19 @@ app.get("/api/whats-new", (req, res) => {
 });
 
 // 업데이트 기록을 확인했음을 저장 (가이드 버튼 강조 해제)
+// 화면 설정 (품목 목록 보기 방식: 표 / 사진). PC 의 data 폴더에 저장해서 브라우저를 바꿔도 유지
+const LIST_VIEWS = ["table", "cards"];
+app.get("/api/ui-state", (req, res) => {
+  const s = readUiState();
+  res.json({ listView: LIST_VIEWS.includes(s.listView) ? s.listView : "table" });
+});
+app.post("/api/ui-state", (req, res) => {
+  const { listView } = req.body || {};
+  if (!LIST_VIEWS.includes(listView)) return res.status(400).json({ error: "알 수 없는 보기 방식이에요." });
+  saveUiState({ listView });
+  res.json({ listView });
+});
+
 app.post("/api/whats-new/seen", (req, res) => {
   const latestId = CHANGELOG[0]?.id ?? null;
   saveUiState({ lastSeenChangelogId: latestId });
@@ -394,6 +448,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n재고 발주 도우미가 실행됐어요: http://localhost:${PORT}\n`);
   ensureDesktopShortcut();
+  warmUpCache();
 });
 
 // 이미 설치된 PC도 업데이트만 받으면 바탕화면 아이콘이 새 "원클릭" 아이콘으로 바뀌도록,

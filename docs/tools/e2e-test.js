@@ -179,6 +179,18 @@ SUITES.labels = {
     check("행 클릭으로 선택", (await txt("#labelAssignBtn")).includes("1개"));
     await p.select("#labelAssignTarget", krId); await p.click("#labelAssignBtn"); await wait(600);
     check("하나 더 지정", (await p.$$("#labelManagerBody .assign-row")).length === after - 1);
+    // 긴 목록 아래쪽을 골라도 스크롤이 맨 위로 튀지 않아야 함 (매장 영상으로 신고된 문제)
+    await p.setViewport({ width: 1366, height: 560 }); await wait(200);
+    const pane = "#labelManagerBody .manager-pane";
+    await p.$eval(pane, (e) => { e.scrollTop = e.scrollHeight; }); await wait(150);
+    const topBefore = await p.$eval(pane, (e) => Math.round(e.scrollTop));
+    const assignRows = await p.$$("#labelManagerBody .assign-row");
+    await assignRows[assignRows.length - 1].click(); await wait(150);
+    check("품목 체크해도 스크롤 위치 유지", topBefore > 0 && (await p.$eval(pane, (e) => Math.round(e.scrollTop))) === topBefore, `${topBefore}`);
+    check("체크하면 버튼 숫자 바로 갱신", (await txt("#labelAssignBtn")).includes("1개"));
+    await assignRows[assignRows.length - 1].click(); await wait(150);
+    await p.setViewport({ width: 1366, height: 900 }); await wait(200);
+
     // 전체 품목 → 이미 지정된 품목 해제
     await p.select("#labelAssignFilter", "all"); await wait(200);
     check("전체 품목 보기 (현재 라벨 표시)", (await p.$$("#labelManagerBody .assign-row")).length === before && !!(await p.$("#labelManagerBody .assign-current .label-chip:not(.none)")));
@@ -457,6 +469,111 @@ SUITES.records = {
     check("두 번 누르면 발주 취소", (await p.$$(".order-card")).length === 0);
     await p.keyboard.press("Escape"); await wait(150);
     check("취소하면 다시 발주 필요", Number(await txt("#tabCountReorder")) === reorderBefore && (await txt("#tabCountPending")) === "0");
+  },
+};
+
+SUITES.naver = {
+  title: "네이버 응답 읽기 (실제 응답 모양으로 확인)",
+  browser: false,
+  seed: () => ({}),
+  async run() {
+    // 2026-09 매장 스토어 실제 응답의 "모양"을 흉내 낸 가짜 응답으로 naverClient 를 돌린다 (값은 가짜)
+    const realFetch = global.fetch;
+    const hourAgo = new Date(Date.now() - 3600e3).toISOString();
+    const order = (id, pid, qty, status) => ({
+      productOrderId: id,
+      content: {
+        order: { orderId: "o" + id, paymentDate: hourAgo, orderDate: hourAgo },
+        productOrder: { productOrderId: id, productId: pid, quantity: qty, productOrderStatus: status },
+      },
+    });
+    global.fetch = async (url) => {
+      const u = String(url);
+      const json = (d) => ({ ok: true, status: 200, text: async () => JSON.stringify(d), json: async () => d });
+      if (u.includes("oauth2/token")) return json({ access_token: "t", expires_in: 10800 });
+      if (u.includes("products/search")) {
+        return json({ contents: [{ originProductNo: 1, channelProducts: [{ channelProductNo: 111, name: "시트지", stockQuantity: 5, salePrice: 1000, representativeImage: { url: "https://shop-phinf.pstatic.net/a.jpg" } }] }] });
+      }
+      if (u.includes("product-orders")) {
+        return json({ data: { contents: [order("A", "111", 3, "DELIVERED"), order("A", "111", 3, "DELIVERED"), order("B", "111", 2, "CANCELED"), order("C", "111", 4, "PAYED"), order("D", "111", 1, "RETURNED")], pagination: { hasNext: false } } });
+      }
+      throw new Error("모르는 요청 " + u);
+    };
+    process.env.NAVER_CLIENT_ID = "x";
+    process.env.NAVER_CLIENT_SECRET = "$2a$10$abcdefghijklmnopqrstuv"; // bcrypt salt 형식
+    try {
+      const modPath = require.resolve(path.join(__dirname, "..", "..", "src", "naverClient.js"));
+      delete require.cache[modPath];
+      const client = require(modPath);
+      const products = await client.fetchProducts();
+      check("상품 대표 사진 주소 읽기", products[0].imageUrl === "https://shop-phinf.pstatic.net/a.jpg", products[0].imageUrl);
+      const orders = await client.fetchRecentOrders(1);
+      check("주문을 content.productOrder 에서 읽기 (품목 번호·수량)", orders.every((o) => o.productId === "111") && orders.some((o) => o.quantity === 3));
+      check("취소·반품 주문은 판매에서 제외", !orders.some((o) => o.quantity === 2 || o.quantity === 1));
+      check("같은 주문이 두 번 와도 한 번만", orders.length === 2, String(orders.length));
+      check("주문 날짜 = 결제일", orders.every((o) => o.orderedAt === hourAgo));
+    } finally {
+      global.fetch = realFetch;
+    }
+  },
+};
+
+SUITES.today = {
+  title: "첫 화면 오늘 할 일 · 표/사진 보기 · 대량 주문 표시",
+  async seed() {
+    const ga = await idsWhere(isGlassArt);
+    const due = new Date(Date.now() - 864e5).toISOString();
+    return {
+      "vendors.json": { ...VENDORS, sz: { name: "Shenzhen Acrylic", email: "s@sz.cn", lang: "zh" } },
+      "suppliers.json": { ...Object.fromEntries(ga.map((id) => [id, { vendorId: "gw" }])), "2014": { vendorId: "sz" } },
+      "orders.json": { o1: { vendorId: "gw", vendorName: "글라스월드", createdAt: new Date(Date.now() - 5 * 864e5).toISOString(), items: [{ productId: "2016", name: "투명 아크릴", qty: 3, expectedAt: due }] } },
+    };
+  },
+  async run({ p, server }) {
+    const { txt } = helpers(p);
+    await helpers(p).closeAutoPopup();
+    const titles = await p.$$eval("#todayTasks .task-title strong", (x) => x.map((e) => e.textContent.trim()));
+    check("업체별 발주 할 일", titles.some((t) => t.startsWith("글라스월드에 발주하기")) && titles.some((t) => t.startsWith("Shenzhen Acrylic에 발주하기")), titles.join(" | "));
+    check("해외 업체 언어 표시", titles.some((t) => t.includes("中文")));
+    check("입고 지연 할 일", titles.some((t) => t.startsWith("입고 확인 · 지연 1품목")));
+    check("업체 없는 품목 할 일", titles.some((t) => t.startsWith("업체 없는 품목 연결")));
+    check("제목에 할 일 개수", (await txt("#pageTitle")) === `오늘 할 일 ${titles.length}가지`);
+    const gwIdx = titles.findIndex((t) => t.startsWith("글라스월드"));
+    await (await p.$$("#todayTasks [data-task]"))[gwIdx].click(); await wait(300);
+    check("발주하기 → 그 업체 발주서", (await txt(".vendor-card.active .vendor-name")) === "글라스월드");
+    await p.keyboard.press("Escape"); await wait(150);
+    const btns = await p.$$eval("#todayTasks [data-task]", (b) => b.map((x) => x.textContent.trim()));
+    await (await p.$$("#todayTasks [data-task]"))[btns.indexOf("입고 처리")].click(); await wait(300);
+    check("입고 처리 → 발주 기록 창", !(await helpers(p).hidden("ordersOverlay")));
+    await p.keyboard.press("Escape"); await wait(150);
+    await (await p.$$("#todayTasks [data-task]"))[btns.indexOf("연결하기")].click(); await wait(300);
+    check("연결하기 → 업체 관리 품목 연결 탭", (await txt("#vendorManagerBody .tab.active")).startsWith("품목 연결"));
+    await p.keyboard.press("Escape"); await wait(150);
+
+    // 표 / 사진 보기
+    const rowsTable = (await p.$$(".product-row")).length;
+    await p.click('.view-btn[data-view="cards"]'); await wait(300);
+    check("사진 보기로 바꾸면 같은 품목이 카드로", (await p.$$(".product-card")).length === rowsTable && (await helpers(p).hidden("tableHead")));
+    check("카드에 판매 그래프", (await p.$$(".product-card .card-spark polyline")).length > 0);
+    await p.click(".product-card"); await wait(250);
+    check("카드 누르면 상세", !(await helpers(p).hidden("detailOverlay")));
+    await p.keyboard.press("Escape"); await wait(150);
+    await p.goto(server.url, { waitUntil: "networkidle0" }); await wait(400); await helpers(p).closeAutoPopup();
+    check("다시 열어도 사진 보기 유지", (await p.$eval(".view-btn.active", (e) => e.dataset.view)) === "cards" && (await p.$$(".product-card")).length > 0);
+    await p.click('.view-btn[data-view="table"]'); await wait(300);
+    check("표로 되돌리기", (await p.$$(".product-row")).length === rowsTable);
+
+    // 품절 + 판매 기록 없음 → 직접 정하기 (샘플에서 '글라스아트 도안'은 판매 0)
+    await p.click('.tab[data-tab="all"]'); await wait(150);
+    check("판매 기록 없는 품목은 '판매 없음'", (await p.$$eval(".product-row .status", (x) => x.map((e) => e.textContent))).includes("판매 없음"));
+
+    // 대량 주문 판단 (샘플엔 없어서 계산 함수를 직접 확인): 하루 475개 몰림 → 표시, 그 날 빼면 0
+    const spike = await p.evaluate(() => spikeInfo({ dailySales: [0, 0, 475, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], leadTimeDays: 7, bufferDays: 3, stockQuantity: 0 }));
+    check("하루에 몰린 대량 주문 감지", spike && spike.max === 475 && spike.velocity === 0 && spike.rec === 0, JSON.stringify(spike));
+    const even = await p.evaluate(() => spikeInfo({ dailySales: [3, 2, 4, 3, 2, 3, 4, 2, 3, 3, 2, 4, 3, 2], leadTimeDays: 7, bufferDays: 3, stockQuantity: 0 }));
+    check("고르게 팔리면 대량 주문 아님", even === null);
+    const small = await p.evaluate(() => spikeInfo({ dailySales: [0, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0], leadTimeDays: 7, bufferDays: 3, stockQuantity: 0 }));
+    check("적은 수량은 대량 주문으로 안 봄", small === null);
   },
 };
 

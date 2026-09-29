@@ -137,6 +137,8 @@ async function fetchProducts() {
         name: channelProduct.name ?? channelProduct.channelProductName ?? "이름 없음",
         stockQuantity: Number(channelProduct.stockQuantity ?? 0),
         salePrice: Number(channelProduct.salePrice ?? 0),
+        // 대표 사진 (사진으로 보기 카드에 씀). 2026-09 실제 응답에서 channelProducts[].representativeImage.url 확인
+        imageUrl: channelProduct.representativeImage?.url ?? item.representativeImage?.url ?? null,
       });
     }
 
@@ -146,6 +148,12 @@ async function fetchProducts() {
   }
 
   return products;
+}
+
+// 판매로 세지 않는 주문 상태: 결제 전, 취소, 반품
+function countsAsSale(status) {
+  if (!status) return true;
+  return !/^(PAYMENT_WAITING|CANCELED|CANCELED_BY_NOPAYMENT|RETURNED)$/.test(status) && !status.startsWith("CANCEL") && !status.startsWith("RETURN");
 }
 
 /**
@@ -161,6 +169,7 @@ async function fetchRecentOrders(days) {
   const CHUNK_MS = 23 * 60 * 60 * 1000;
 
   const orders = [];
+  const seen = new Set(); // 구간 경계에서 같은 상품주문이 두 번 오는 경우를 거른다
   let chunkFrom = from;
   while (chunkFrom < to) {
     const chunkTo = new Date(Math.min(chunkFrom.getTime() + CHUNK_MS, to.getTime()));
@@ -178,12 +187,20 @@ async function fetchRecentOrders(days) {
         method: "GET",
       });
 
+      // 실제 응답(2026-09 확인): data.contents[] = { productOrderId, content: { order, productOrder, delivery } }
+      // 예전 코드는 content 한 단계를 빼먹어 모든 주문이 품목 없음·수량 0 으로 읽혀 판매 속도가 전부 0 이었다.
       const pageOrders = data?.data?.contents ?? data?.contents ?? [];
       for (const o of pageOrders) {
+        const c = o.content ?? o;
+        const po = c.productOrder ?? {};
+        const id = String(o.productOrderId ?? po.productOrderId ?? "");
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+        if (!countsAsSale(po.productOrderStatus)) continue;
         orders.push({
-          productId: String(o.productOrder?.productId ?? o.productId ?? ""),
-          quantity: Number(o.productOrder?.quantity ?? o.quantity ?? 0),
-          orderedAt: o.productOrder?.orderDate ?? o.orderDate ?? null,
+          productId: String(po.productId ?? ""),
+          quantity: Number(po.quantity ?? 0),
+          orderedAt: c.order?.paymentDate ?? c.order?.orderDate ?? po.placeOrderDate ?? null,
         });
       }
 

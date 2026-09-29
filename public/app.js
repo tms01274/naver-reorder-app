@@ -122,6 +122,30 @@ function isLate(iso) {
   return end.getTime() < Date.now();
 }
 
+// 하루에 대량 주문이 몰려 판매 속도가 부풀었는지: 그 하루가 기간 판매의 절반을 넘고 10개 이상일 때
+// 계산은 그대로 두고, 그 날을 뺀 판매 속도와 권장 수량을 함께 보여줘서 사람이 판단하게 한다
+function spikeInfo(p) {
+  const ds = p.dailySales || [];
+  const total = ds.reduce((a, b) => a + b, 0);
+  const max = Math.max(0, ...ds);
+  if (total < 10 || max < 10 || max / total <= 0.5) return null;
+  const velocity = (total - max) / ds.length;
+  const cover = (p.leadTimeDays || 0) + (p.bufferDays || 0);
+  const rec = Math.max(0, Math.ceil(velocity * cover) - p.stockQuantity - (p.pendingOrder?.qty || 0));
+  return { max, velocity: Number(velocity.toFixed(2)), rec };
+}
+
+function spikeChip(p) {
+  const sp = spikeInfo(p);
+  return sp ? `<span class="spike-chip" title="하루에 ${sp.max}개 주문이 몰려 판매 속도가 높게 나왔을 수 있어요">대량 주문 포함</span>` : "";
+}
+
+function spikeNoteHtml(p) {
+  const sp = spikeInfo(p);
+  if (!sp) return "";
+  return `<div class="warn-box"><span>최근 ${p.dailySales.length}일 중 <b>하루에 ${sp.max}개</b> 주문이 몰렸어요. 이 날을 빼면 하루 ${sp.velocity}개 판매, 권장 발주 <b>${sp.rec}개</b>예요. 일회성 대량 주문이었다면 발주서에서 수량을 줄여주세요.</span></div>`;
+}
+
 // "발주함 50개 · 10/5 예정" (예정일이 지나면 "입고 지연")
 function pendingChip(po) {
   if (!po) return "";
@@ -191,7 +215,131 @@ async function refreshAfterLabelChange() {
 
 // ── 메인 화면 ───────────────────────────────────────
 
+// ── 오늘 할 일 ──────────────────────────────────────
+// 첫 화면 맨 위. 지금 데이터로 할 일을 만들어 보여주고, 누르면 바로 그 작업으로 이어진다.
+//  - 업체마다 "○○에 발주하기" (발주 필요 품목이 있는 업체만, 급한 순)
+//  - "입고 확인" (입고 예정일이 지난 발주)
+//  - "업체 연결" (발주가 필요한데 업체가 없어 발주서를 못 만드는 품목)
+
+const TASK_ICONS = {
+  order: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.2L4 17.2V4z"></path><path d="M8 9h8M8 12h5"></path></svg>',
+  receive: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"></path><path d="M3 7v10l9 4 9-4V7"></path></svg>',
+  link: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"></path><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"></path></svg>',
+  done: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg>',
+};
+
+function todayDateText() {
+  const d = new Date();
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 ${"일월화수목금토"[d.getDay()]}요일`;
+}
+
+function buildTodayTasks(products) {
+  const tasks = [];
+
+  // 업체별 발주 (발주 필요 품목이 있는 업체만)
+  const byVendor = new Map();
+  for (const p of products) {
+    if (!p.needsReorder || !p.vendorId) continue;
+    if (!byVendor.has(p.vendorId)) byVendor.set(p.vendorId, []);
+    byVendor.get(p.vendorId).push(p);
+  }
+  const vendorTasks = [...byVendor.entries()].map(([vendorId, items]) => ({
+    kind: "order",
+    vendor: vendorById(vendorId) || items[0].vendor,
+    items: sortByUrgency(items),
+  }));
+  // 가장 급한 품목이 급한 업체부터
+  vendorTasks.sort((a, b) => {
+    const la = LEVEL_ORDER[statusOf(a.items[0]).level], lb = LEVEL_ORDER[statusOf(b.items[0]).level];
+    if (la !== lb) return la - lb;
+    const sa = a.items[0].stockQuantity <= 0 ? -1 : a.items[0].daysLeft ?? Infinity;
+    const sb = b.items[0].stockQuantity <= 0 ? -1 : b.items[0].daysLeft ?? Infinity;
+    return sa - sb || b.items.length - a.items.length;
+  });
+  tasks.push(...vendorTasks);
+
+  // 입고 지연
+  const late = products.filter((p) => p.pendingOrder && isLate(p.pendingOrder.expectedAt));
+  if (late.length) tasks.push({ kind: "receive", items: late });
+
+  // 발주가 필요한데 업체가 없는 품목
+  const noVendor = products.filter((p) => p.needsReorder && !p.vendorId);
+  if (noVendor.length) tasks.push({ kind: "link", items: noVendor });
+
+  return tasks;
+}
+
+function todayTaskHtml(t, i) {
+  if (t.kind === "order") {
+    const total = t.items.reduce((sum, p) => sum + (p.recommendedOrderQty || 0), 0);
+    const lang = t.vendor?.lang && t.vendor.lang !== "ko" ? `<span class="lang-badge">${escapeHtml(langInfo(t.vendor.lang).label)}</span>` : "";
+    const preview = t.items.slice(0, 2).map((p) => {
+      const s = statusOf(p);
+      return `<div class="task-item"><span class="name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span><span class="task-item-status ${s.level}">${s.text}</span></div>`;
+    }).join("");
+    const more = t.items.length > 2 ? `<div class="task-item more">외 ${t.items.length - 2}품목</div>` : "";
+    return `
+      <div class="task-card task-order">
+        <div class="task-head">
+          <span class="task-icon danger">${TASK_ICONS.order}</span>
+          <div class="task-title">
+            <strong>${escapeHtml(t.vendor?.name || "업체")}에 발주하기 ${lang}</strong>
+            <span>발주 필요 ${t.items.length}품목 · 권장 ${total}개</span>
+          </div>
+        </div>
+        <div class="task-items">${preview}${more}</div>
+        <div class="task-actions"><button class="btn-primary" data-task="${i}">발주서 만들기</button></div>
+      </div>`;
+  }
+  if (t.kind === "receive") {
+    const vendors = [...new Set(t.items.map((p) => p.vendor?.name).filter(Boolean))];
+    const who = vendors.length ? `${vendors[0]}${vendors.length > 1 ? ` 외 ${vendors.length - 1}곳` : ""} · ` : "";
+    return `
+      <div class="task-card task-small">
+        <span class="task-icon warn">${TASK_ICONS.receive}</span>
+        <div class="task-title">
+          <strong>입고 확인 · 지연 ${t.items.length}품목</strong>
+          <span>${escapeHtml(who)}입고 예정일이 지났어요. 들어왔으면 입고 처리해 주세요</span>
+        </div>
+        <button class="btn-outline btn-sm" data-task="${i}">입고 처리</button>
+      </div>`;
+  }
+  return `
+    <div class="task-card task-small">
+      <span class="task-icon brand">${TASK_ICONS.link}</span>
+      <div class="task-title">
+        <strong>업체 없는 품목 연결 · ${t.items.length}개</strong>
+        <span>발주가 필요한데 업체가 없어 발주서에 안 나와요</span>
+      </div>
+      <button class="btn-outline btn-sm" data-task="${i}">연결하기</button>
+    </div>`;
+}
+
+function renderTodayTasks() {
+  const tasks = buildTodayTasks(currentData.products);
+  $("todayDate").textContent = todayDateText();
+  $("pageTitle").textContent = tasks.length ? `오늘 할 일 ${tasks.length}가지` : "오늘 할 일";
+  const box = $("todayTasks");
+  box.innerHTML = tasks.length
+    ? tasks.map(todayTaskHtml).join("")
+    : `<div class="task-card task-small task-empty">
+        <span class="task-icon ok">${TASK_ICONS.done}</span>
+        <div class="task-title"><strong>오늘은 할 일이 없어요</strong><span>발주가 필요한 품목도, 늦어진 입고도 없어요.</span></div>
+      </div>`;
+  box.querySelectorAll("[data-task]").forEach((btn) => {
+    const t = tasks[Number(btn.dataset.task)];
+    btn.addEventListener("click", () => {
+      if (t.kind === "order") openOrder({ vendorId: t.vendor.id });
+      else if (t.kind === "receive") openOrders();
+      else openVendorManager("assign");
+    });
+  });
+}
+
 function renderLoadError(message) {
+  $("todayTasks").innerHTML = "";
+  $("todayDate").textContent = todayDateText();
+  $("pageTitle").textContent = "오늘 할 일";
   $("productList").innerHTML = `<div class="empty-note error-note"><strong>품목을 불러오지 못했어요</strong>${escapeHtml(message)}</div>`;
   for (const id of ["statReorder", "statSoon", "statAll", "statUnlabeled"]) $(id).textContent = "–";
   $("criteriaText").textContent = "네이버 데이터를 불러오지 못했어요. 잠시 후 새로고침을 눌러주세요.";
@@ -228,6 +376,7 @@ function render() {
     `최근 ${data.settings.lookbackDays}일 판매 기준 · 안전 여유 ${data.settings.bufferDays}일 · ` +
     `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")} 기준`;
 
+  renderTodayTasks();
   renderList();
 
   if (!hasAutoOpenedLabelPopup) {
@@ -268,9 +417,95 @@ function renderList() {
     pending: "<strong>입고를 기다리는 품목이 없어요</strong>발주서를 보낸 뒤 '발주 완료로 기록'을 누르면 여기에 나와요.",
     all: "<strong>조건에 맞는 품목이 없어요</strong>",
   }[activeTab];
+  const cards = listView === "cards";
+  $("productList").classList.toggle("cards-view", cards);
+  $("tableHead").hidden = cards;
+  document.querySelectorAll(".view-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === listView));
   $("productList").innerHTML = list.length
-    ? list.map(rowHtml).join("")
+    ? list.map(cards ? cardHtml : rowHtml).join("")
     : `<div class="empty-note">${query || labelFilter !== "all" ? "<strong>조건에 맞는 품목이 없어요</strong>검색어나 라벨 필터를 확인해주세요." : emptyText}</div>`;
+}
+
+// ── 사진으로 보기 (품목 카드) ───────────────────────
+// 표와 같은 목록·정렬·필터를 카드로 보여준다. 사진 · 남은 재고 막대 · 판매 그래프 · 권장 발주.
+
+// 날짜별 판매량 → 작은 꺾은선 그래프
+function sparklineSvg(values) {
+  const w = 120, h = 30;
+  if (!values?.length || values.every((v) => v === 0)) {
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><line x1="0" y1="${h - 2}" x2="${w}" y2="${h - 2}" stroke="#d9d8d3" stroke-width="1.5" stroke-dasharray="3 3"></line></svg>`;
+  }
+  const max = Math.max(...values);
+  const step = values.length > 1 ? w / (values.length - 1) : w;
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 2 - (v / max) * (h - 4)).toFixed(1)}`).join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="#4f6cf5" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"></polyline></svg>`;
+}
+
+// 남은 재고 막대: 입고까지 필요한 기간(리드타임 + 여유)의 두 배를 꽉 찬 막대로 본다
+function stockBarPercent(p) {
+  if (p.stockQuantity <= 0) return 0;
+  if (p.daysLeft === null) return 100;
+  const target = (p.leadTimeDays || 0) + (p.bufferDays || 0) || 1;
+  return Math.max(3, Math.min(100, Math.round((p.daysLeft / (target * 2)) * 100)));
+}
+
+// 네이버 상품 사진은 원본이 수 MB 라서, 네이버 이미지 서버의 축소본(가로·세로 최대 510px, 약 20KB)을 쓴다
+function thumbnailUrl(url) {
+  if (!url) return null;
+  return /^https:\/\/shop-phinf\.pstatic\.net\//.test(url) && !url.includes("?") ? `${url}?type=m510` : url;
+}
+
+function cardHtml(p) {
+  const s = statusOf(p);
+  const tint = p.label?.color ? `${p.label.color}1f` : "#f0efec";
+  const photo = p.imageUrl
+    ? `<img src="${escapeHtml(thumbnailUrl(p.imageUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+    : `<div class="card-photo-empty"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="M21 16l-5-5-8 9"></path></svg><span>사진 준비 중</span></div>`;
+  const qty = p.recommendedOrderQty;
+  return `
+    <button class="product-card" data-id="${escapeHtml(p.id)}">
+      <div class="card-photo" style="background:${tint};">
+        ${photo}
+        <span class="status ${s.level} card-status">${s.text}</span>
+      </div>
+      <div class="card-body">
+        <div class="card-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
+        <div class="product-sub">${labelChip(p.label)}${pendingChip(p.pendingOrder)}${spikeChip(p)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
+        <div class="card-stock">
+          <div class="card-stock-text"><span>재고 ${p.stockQuantity}개</span><span>하루 ${p.dailyVelocity}개</span></div>
+          <div class="stock-bar"><div class="stock-bar-fill ${s.level}" style="width:${stockBarPercent(p)}%;"></div></div>
+        </div>
+        <div class="card-foot">
+          <div class="card-spark"><span>최근 ${p.dailySales?.length || 0}일 판매</span>${sparklineSvg(p.dailySales)}</div>
+          ${qty > 0
+            ? `<div class="card-rec"><span>권장 발주</span><strong>${qty}개</strong></div>`
+            : p.needsReorder ? `<div class="card-rec"><span>권장 발주</span><span class="qty-manual">직접 정하기</span></div>` : `<div class="card-rec none">발주 필요 없음</div>`}
+        </div>
+      </div>
+    </button>`;
+}
+
+// 보기 방식(표 / 사진)은 PC 에 저장해서 다음에 켜도 그대로
+let listView = "table";
+
+async function loadListView() {
+  try {
+    listView = (await fetchJson("/api/ui-state")).listView || "table";
+  } catch {
+    listView = "table";
+  }
+  renderList();
+}
+
+async function setListView(view) {
+  if (view === listView) return;
+  listView = view;
+  renderList();
+  try {
+    await postJson("/api/ui-state", "POST", { listView: view });
+  } catch {
+    // 저장에 실패해도 지금 화면은 바뀐 채로 두고, 다음에 켤 때만 원래대로
+  }
 }
 
 function rowHtml(p) {
@@ -280,12 +515,12 @@ function rowHtml(p) {
     <button class="product-row" data-id="${escapeHtml(p.id)}">
       <div>
         <div class="product-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
-        <div class="product-sub">${labelChip(p.label)}${pendingChip(p.pendingOrder)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
+        <div class="product-sub">${labelChip(p.label)}${pendingChip(p.pendingOrder)}${spikeChip(p)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
       </div>
       <div class="num"><span class="cell-label">재고</span>${p.stockQuantity}개</div>
       <div class="num"><span class="cell-label">일평균 판매</span>${p.dailyVelocity}개</div>
       <div class="status-cell"><span class="status ${s.level}">${s.text}</span></div>
-      <div class="num"><span class="cell-label">권장 발주</span>${qty > 0 ? `<span class="qty-strong">${qty}개</span>` : `<span class="qty-zero">–</span>`}</div>
+      <div class="num"><span class="cell-label">권장 발주</span>${qty > 0 ? `<span class="qty-strong">${qty}개</span>` : p.needsReorder ? `<span class="qty-manual">직접 정하기</span>` : `<span class="qty-zero">–</span>`}</div>
     </button>
   `;
 }
@@ -340,8 +575,9 @@ function openDetail(productId) {
       <div class="stat-box"><div class="label">현재 재고</div><div class="value">${p.stockQuantity}개</div></div>
       <div class="stat-box"><div class="label">일평균 판매</div><div class="value">${p.dailyVelocity}개</div></div>
       <div class="stat-box"><div class="label">리드타임</div><div class="value">${p.leadTimeDays}일</div></div>
-      <div class="stat-box highlight"><div class="label">권장 발주</div><div class="value">${p.recommendedOrderQty}개</div></div>
+      <div class="stat-box highlight"><div class="label">권장 발주</div><div class="value">${p.recommendedOrderQty > 0 || !p.needsReorder ? `${p.recommendedOrderQty}개` : "직접"}</div></div>
     </div>
+    ${spikeNoteHtml(p)}${p.needsReorder && p.recommendedOrderQty <= 0 ? `<div class="warn-box"><span>품절인데 최근 판매 기록이 없어서 권장 수량을 계산할 수 없어요. 발주서에서 수량을 직접 정해주세요.</span></div>` : ""}
 
     <h4>거래 업체 · 입고유형</h4>
     <div class="form-grid">
@@ -578,6 +814,7 @@ function orderRowHtml(p, item) {
       <span class="order-name">
         <span class="name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
         ${p.supplier?.vendorItemName ? `<span class="vendor-item-name">업체용 품명: ${escapeHtml(p.supplier.vendorItemName)}</span>` : ""}
+        ${spikeInfo(p) ? `<span class="spike-note">하루 ${spikeInfo(p).max}개 대량 주문 포함 · 제외하면 권장 ${spikeInfo(p).rec}개</span>` : ""}
         ${p.pendingOrder ? `<span class="pending-note">이미 발주함 · ${daysAgoText(p.pendingOrder.orderedAt)} ${p.pendingOrder.qty}개 (${shortDate(p.pendingOrder.expectedAt)} 입고 예정)</span>` : ""}
         ${p.vendorId !== order.vendorId ? `<span class="vendor-chip other">${p.vendor ? `${escapeHtml(p.vendor.name)} 품목` : "업체 미지정"}</span>` : ""}
       </span>
@@ -761,6 +998,23 @@ function renderOrderMail() {
 // 라벨 관리와 업체 관리는 똑같이 [목록 관리] [품목 지정] 두 탭으로 나뉜다.
 // 품목 지정 탭: 지정 안 된 품목만 / 전체 품목을 보고, 골라서 한 번에 지정 · 변경 · 해제한다.
 
+// 팝업 안 목록을 다시 그려도 스크롤 위치를 유지한다. 같은 화면(탭·보기)일 때만 유지하고, 탭을 바꾸면 맨 위부터.
+// 사용: const top = paneScrollBefore(id, key); ...innerHTML 다시 그리기...; paneScrollAfter(id, top)
+function paneScrollBefore(bodyId, viewKey) {
+  const pane = document.querySelector(`#${bodyId} .manager-pane`);
+  return pane && pane.dataset.view === viewKey ? pane.scrollTop : 0;
+}
+function paneScrollAfter(bodyId, top) {
+  const pane = document.querySelector(`#${bodyId} .manager-pane`);
+  if (pane && top) pane.scrollTop = top;
+}
+
+// 팝업을 새로 열 때는 지난번 스크롤 위치를 쓰지 않는다
+function resetPaneScroll(bodyId) {
+  const pane = document.querySelector(`#${bodyId} .manager-pane`);
+  if (pane) pane.dataset.view = "";
+}
+
 function newManagerState() {
   return { tab: "list", selected: new Set(), search: "", filter: "none", listSearch: "" };
 }
@@ -836,12 +1090,26 @@ function bindAssignPane(cfg, rerender) {
     }
     rerender();
   });
+  // 품목을 누를 때는 목록을 다시 그리지 않고 그 줄과 버튼만 바꾼다
+  // (다시 그리면 스크롤이 맨 위로 튀어서, 긴 목록 아래쪽을 고를 때마다 다시 내려가야 했음)
+  const refreshSelectionUi = () => {
+    const btn = $(`${prefix}AssignBtn`);
+    if (btn) {
+      btn.disabled = state.selected.size === 0;
+      btn.textContent = `선택한 ${state.selected.size}개 ${cfg.verb}`;
+    }
+    const all = $(`${prefix}AssignCheckAll`);
+    if (all) all.checked = visible.length > 0 && visible.every((p) => state.selected.has(p.id));
+  };
   document.querySelectorAll(`#${cfg.bodyId} .assign-row`).forEach((row) => {
     row.addEventListener("click", () => {
       const id = row.dataset.productId;
-      if (state.selected.has(id)) state.selected.delete(id);
-      else state.selected.add(id);
-      rerender();
+      const on = !state.selected.has(id);
+      if (on) state.selected.add(id);
+      else state.selected.delete(id);
+      row.classList.toggle("checked", on);
+      row.querySelector("input[type=checkbox]").checked = on;
+      refreshSelectionUi();
     });
   });
   $(`${prefix}AssignBtn`)?.addEventListener("click", async () => {
@@ -938,6 +1206,7 @@ function openVendorManager(tab) {
   s.listSearch = "";
   s.filter = "none";
   s.tab = tab || (currentVendors.length && getProductsWithoutVendor().length ? "assign" : "list");
+  resetPaneScroll("vendorManagerBody");
   renderVendorManagerBody();
   openModal("vendorOverlay");
 }
@@ -972,13 +1241,15 @@ function renderVendorManagerBody() {
     </div>`;
 
   const cfg = vendorAssignCfg();
+  const keepTop = paneScrollBefore("vendorManagerBody", `${s.tab}|${s.filter}`);
   $("vendorManagerBody").innerHTML = `
     <h3>거래 업체</h3>
     <p class="modal-desc">발주를 보내는 업체와 이메일을 등록하고, 품목을 업체에 연결해요. 발주서를 만들 때 업체를 고르면 연결된 품목이 나와요.</p>
     ${managerTabsHtml(s, "업체 목록", currentVendors.length, "품목 연결", unassigned.length)}
-    <div class="manager-pane">${s.tab === "list" ? listPane : assignPaneHtml(cfg)}</div>
+    <div class="manager-pane" data-view="${s.tab}|${s.filter}">${s.tab === "list" ? listPane : assignPaneHtml(cfg)}</div>
   `;
 
+  paneScrollAfter("vendorManagerBody", keepTop);
   const rerender = () => renderVendorManagerBody();
   bindManagerTabs("vendorManagerBody", s, rerender);
   if (s.tab === "assign") {
@@ -1049,6 +1320,7 @@ const ordersState = { tab: "pending", vendor: "all", orders: [] };
 async function openOrders() {
   ordersState.tab = "pending";
   ordersState.vendor = "all";
+  resetPaneScroll("ordersBody");
   await reloadOrders();
   openModal("ordersOverlay");
 }
@@ -1102,6 +1374,7 @@ function renderOrders() {
       </div>`;
   }).join("");
 
+  const keepTop = paneScrollBefore("ordersBody", `${s.tab}|${s.vendor}`);
   $("ordersBody").innerHTML = `
     <h3>발주 기록</h3>
     <p class="modal-desc">발주서에서 '발주 완료로 기록'한 내용이에요. 물건이 들어오면 <b>입고</b>를 눌러주세요. 입고 전까지는 발주한 수량을 들어올 재고로 계산해서, 같은 품목이 다시 '발주 필요'로 뜨지 않아요.</p>
@@ -1116,11 +1389,12 @@ function renderOrders() {
           ${vendorIds.map((id) => `<option value="${escapeHtml(id)}" ${s.vendor === id ? "selected" : ""}>${escapeHtml(vendorById(id)?.name || all.find((o) => o.vendorId === id).vendorName)}</option>`).join("")}
         </select>` : ""}
     </div>
-    <div class="manager-pane">
+    <div class="manager-pane" data-view="${s.tab}|${s.vendor}">
       ${list.length ? cards : `<div class="empty-note">${s.tab === "pending" ? "<strong>입고를 기다리는 발주가 없어요</strong>발주서를 보낸 뒤 '발주 완료로 기록'을 누르면 여기에 나와요." : "<strong>발주 기록이 없어요</strong>"}</div>`}
     </div>
   `;
 
+  paneScrollAfter("ordersBody", keepTop);
   document.querySelectorAll("[data-orders-tab]").forEach((b) => {
     b.addEventListener("click", () => { s.tab = b.dataset.ordersTab; renderOrders(); });
   });
@@ -1268,6 +1542,7 @@ function openLabelManager(tab) {
   s.listSearch = "";
   s.filter = "none";
   s.tab = tab || (currentLabels.length && getUnlabeledProducts().length ? "assign" : "list");
+  resetPaneScroll("labelManagerBody");
   renderLabelManagerBody();
   openModal("labelOverlay");
 }
@@ -1302,13 +1577,15 @@ function renderLabelManagerBody() {
     </div>`;
 
   const cfg = labelAssignCfg();
+  const keepTop = paneScrollBefore("labelManagerBody", `${s.tab}|${s.filter}`);
   $("labelManagerBody").innerHTML = `
     <h3>입고유형 라벨</h3>
     <p class="modal-desc">국내/수입처럼 입고까지 걸리는 기간이 다른 품목을 라벨로 나눠요. 라벨의 리드타임으로 발주 시점을 계산해요.</p>
     ${managerTabsHtml(s, "라벨 목록", currentLabels.length, "품목에 지정", unlabeled.length)}
-    <div class="manager-pane">${s.tab === "list" ? listPane : assignPaneHtml(cfg)}</div>
+    <div class="manager-pane" data-view="${s.tab}|${s.filter}">${s.tab === "list" ? listPane : assignPaneHtml(cfg)}</div>
   `;
 
+  paneScrollAfter("labelManagerBody", keepTop);
   const rerender = () => renderLabelManagerBody();
   bindManagerTabs("labelManagerBody", s, rerender);
   if (s.tab === "assign") {
@@ -1474,8 +1751,11 @@ document.querySelectorAll("[data-tab]").forEach((el) => {
 $("searchInput").addEventListener("input", renderList);
 $("labelFilter").addEventListener("change", renderList);
 $("productList").addEventListener("click", (e) => {
-  const row = e.target.closest(".product-row");
+  const row = e.target.closest(".product-row, .product-card");
   if (row) openDetail(row.dataset.id);
+});
+document.querySelectorAll(".view-btn").forEach((b) => {
+  b.addEventListener("click", () => setListView(b.dataset.view));
 });
 
 // 닫기 버튼 / 바깥 영역 클릭 / Esc 키로 팝업 닫기
@@ -1495,4 +1775,5 @@ document.addEventListener("keydown", (e) => {
 
 loadProducts();
 loadWhatsNew().catch((err) => console.error("업데이트 기록을 불러오지 못했어요:", err));
+loadListView();
 loadMailTemplate().catch((err) => console.error("메일 양식을 불러오지 못했어요:", err));
