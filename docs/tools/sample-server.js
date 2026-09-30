@@ -26,7 +26,7 @@ function findChrome() {
 // seed: { "파일이름.json": 내용 } — 서버가 켜지기 전에 data 폴더에 넣어둘 파일 (예전 데이터 옮기기 테스트용)
 async function startSampleServer(port, { seed } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mali-sample-"));
-  for (const item of ["server.js", "package.json", "src", "public", "docs"]) {
+  for (const item of ["server.js", "package.json", "src", "public", "docs", "새PC-설치하기.bat"]) {
     fs.cpSync(path.join(ROOT, item), path.join(dir, item), { recursive: true, filter: (src) => !src.includes(`${path.sep}tools`) });
   }
   fs.copyFileSync(path.join(__dirname, "sampleData.js"), path.join(dir, "src", "mockData.js"));
@@ -40,7 +40,8 @@ async function startSampleServer(port, { seed } = {}) {
   const child = spawn(process.execPath, ["server.js"], {
     cwd: dir,
     // 임시 폴더에는 node_modules 가 없으므로 원래 프로젝트의 것을 쓴다
-    env: { ...process.env, MOCK_MODE: "true", PORT: String(port), NODE_PATH: path.join(ROOT, "node_modules") },
+    // 구글 드라이브는 테스트가 지정할 때만 (진짜 구글 드라이브에 백업하지 않게)
+    env: { ...process.env, MOCK_MODE: "true", PORT: String(port), NODE_PATH: path.join(ROOT, "node_modules"), GOOGLE_DRIVE_DIR: process.env.GOOGLE_DRIVE_DIR || path.join(dir, "no-google-drive") },
     stdio: "ignore",
   });
 

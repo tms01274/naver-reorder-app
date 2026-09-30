@@ -207,6 +207,7 @@
       <div class="tabs guide-tabs" role="tablist">
         <button class="tab active" data-guide-tab="updates">업데이트 내용</button>
         <button class="tab" data-guide-tab="howto">사용 가이드</button>
+        <button class="tab" data-guide-tab="move">백업 · PC 옮기기</button>
       </div>
 
       <div id="guideUpdates" class="guide-pane"></div>
@@ -227,7 +228,7 @@
             <li>바탕화면 <b>'재고 발주 도우미'</b> 아이콘을 누르면 최신 버전으로 업데이트되고 화면이 열려요.</li>
             <li>첫 화면의 <b>발주 필요</b> 목록을 확인해요. 빨간색일수록 급한 품목이에요.</li>
             <li><b>발주서 만들기</b>를 눌러 업체를 고르고, 보낼 품목과 수량을 확인해요.</li>
-            <li><b>메일 내용 만들기</b> → <b>네이버 메일 열기</b> → 받는 사람 · 제목 · 본문을 차례로 <b>복사</b>해서 붙여넣고 보내요.</li>
+            <li><b>메일 내용 만들기</b> → <b>Gmail로 보내기</b> → 내용이 채워진 Gmail 쓰기 창에서 확인하고 <b>보내기</b>.</li>
           </ol>
         </section>
         <section class="guide-section">
@@ -273,6 +274,17 @@
           </ul>
         </section>
       </div>
+
+      <!-- 백업 상태 · 새 PC 로 옮기는 방법 (app.js 의 renderMovePane) -->
+      <div id="guideMove" class="guide-pane" hidden></div>
+    </div>
+  </div>
+
+  <!-- 새 PC 설정: 백업 가져오기 · 네이버 API 키 (새로 설치한 PC 에서 자동으로 열림) -->
+  <div id="setupOverlay" class="overlay" hidden>
+    <div class="modal modal-wide">
+      <button class="btn-close" data-close="setupOverlay" aria-label="닫기">×</button>
+      <div id="setupBody"></div>
     </div>
   </div>
 

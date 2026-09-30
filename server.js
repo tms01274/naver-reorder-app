@@ -6,7 +6,8 @@ const { execFile } = require("child_process");
 
 const { computeReorderList, roundOrderQty } = require("./src/reorderLogic");
 const { assignOrdersToOptionRows, inheritParentInfo } = require("./src/productOptions");
-const { startDailyBackup } = require("./src/backup");
+const { startDailyBackup, backupData, backupStatus, SETUP_FILE } = require("./src/backup");
+const setup = require("./src/setup");
 const { getAllSuppliers, upsertSupplier, clearFieldFromAll, setFieldForProducts, migrateSuppliers } = require("./src/suppliers");
 const { getAllVendors, createVendor, updateVendor, deleteVendor, migrateLegacySupplierFields } = require("./src/vendors");
 const {
@@ -21,8 +22,14 @@ const { readSettings, saveSettings } = require("./src/settings");
 const { CHANGELOG } = require("./src/changelog");
 const { readUiState, saveUiState } = require("./src/uiState");
 
-const MOCK_MODE = String(process.env.MOCK_MODE || "true").toLowerCase() !== "false";
-const naverClient = MOCK_MODE ? require("./src/mockData") : require("./src/naverClient");
+// 새 PC 설정 화면에서 API 키를 넣으면 서버를 다시 켜지 않고 실제 데이터 모드로 바꾼다 (useNaverMode)
+let MOCK_MODE;
+let naverClient;
+function useNaverMode() {
+  MOCK_MODE = String(process.env.MOCK_MODE || "true").toLowerCase() !== "false";
+  naverClient = MOCK_MODE ? require("./src/mockData") : require("./src/naverClient");
+}
+useNaverMode();
 
 if (MOCK_MODE) {
   console.log("⚠️  MOCK_MODE=true 로 실행 중입니다. 샘플 데이터로 동작합니다.");
@@ -641,6 +648,59 @@ app.post("/api/mail-template", (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// ── 새 PC 설정 · 백업 ──────────────────────────────────
+
+app.get("/api/setup", async (req, res) => {
+  res.json({ ...(await setup.setupStatus({ mockMode: MOCK_MODE })), naver: { ...naverStatus } });
+});
+
+// 관리자에게 알려줄 이 PC 의 인터넷 주소 (네이버 API 허용 IP)
+app.get("/api/setup/ip", async (req, res) => {
+  res.json({ ip: await setup.publicIp() });
+});
+
+// 백업 가져오기: { source: "drive" | "local", date } 또는 { files: { "vendors.json": "...", ... } } (USB 등에서 고른 파일)
+app.post("/api/setup/restore", (req, res) => {
+  try {
+    const { source, date, files } = req.body || {};
+    const restored = files ? setup.restoreFiles(files) : setup.restoreFromBackup(source, date);
+    res.json({ ok: true, restored });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 네이버 API 키 넣기 (관리자) → .env 저장, 실제 데이터 모드로 바꾸고 연결 확인
+app.post("/api/setup/naver-keys", async (req, res) => {
+  try {
+    setup.saveNaverKeys(req.body?.clientId, req.body?.clientSecret);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  useNaverMode();
+  naverClient.resetAuth?.();
+  naverCache.clear();
+  try {
+    await naverClient.checkConnection?.();
+    Object.assign(naverStatus, { ok: true, message: "", failedAt: null, lastSuccessAt: new Date().toISOString() });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("네이버 연결 확인 실패:", err.message.split("\n")[0]);
+    res.json({ ok: false, message: naverFailureMessage(err), ip: await setup.publicIp() });
+  }
+});
+
+// 지금 백업하기 (오늘 백업이 있어도 다시)
+app.post("/api/backup/now", (req, res) => {
+  const result = backupData({ force: true });
+  res.json({ ...result, ...backupStatus() });
+});
+
+// 새 PC 설치 파일 내려받기 (구글 드라이브가 없을 때 USB 로 옮기는 용도)
+app.get("/api/setup/installer", (req, res) => {
+  res.download(path.join(__dirname, SETUP_FILE), SETUP_FILE);
 });
 
 const PORT = process.env.PORT || 3000;

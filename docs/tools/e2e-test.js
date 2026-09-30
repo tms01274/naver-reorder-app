@@ -391,7 +391,12 @@ SUITES.order = {
     await p.click('[data-copy="orderMailBody"]'); await wait(200);
     const clip = await p.evaluate(() => navigator.clipboard.readText().catch(() => null));
     check("본문 복사", clip === null ? (await p.$eval('[data-copy="orderMailBody"]', (e) => e.textContent)).includes("복사됨") : clip === body);
-    check("네이버 메일 링크", (await p.$eval("#orderOpenNaver", (a) => a.href)).startsWith("https://mail.naver.com"));
+    // Gmail 쓰기 창: 누르는 순간 받는 사람 · 제목 · 본문이 주소에 채워짐
+    await p.evaluate(() => $("orderOpenGmail").addEventListener("click", (e) => e.preventDefault())); // 테스트에서는 진짜 Gmail 을 열지 않음
+    await p.click("#orderOpenGmail"); await wait(200);
+    const gmail = new URL(await p.$eval("#orderOpenGmail", (a) => a.href));
+    check("Gmail 쓰기 창에 받는 사람 · 제목 · 본문", gmail.hostname === "mail.google.com" && gmail.searchParams.get("view") === "cm"
+      && gmail.searchParams.get("to") === to && gmail.searchParams.get("su") === subject && gmail.searchParams.get("body") === body);
     check("메일 화면: 발주 완료로 처리은 위쪽 고정", await p.evaluate(() => !!document.querySelector("#orderBody .order-top #orderRecord") && !!document.querySelector("#orderBody .order-pane #orderMailBody")));
     await p.click("#orderBack"); await wait(200);
     check("품목 다시 고르기 → 선택 유지", (await p.$eval(".order-row .order-qty", (e) => e.value)) === "50");
@@ -655,8 +660,8 @@ SUITES.monitor = {
     check("알림에서 발주 완료로 처리", Number(await txt("#tabCountPending")) > pendingBefore && !(await tasks()).some((t) => t.startsWith("보낸 발주 메일")));
     await p.click("#openOrderBtn"); await wait(200); await p.click('[data-order-vendor="gw"]'); await wait(250);
     await p.click(".order-row .order-name"); await wait(100); // 이미 발주한 품목은 미리 체크 안 되므로 하나 체크
-    await p.click("#orderToMail"); await wait(250); await p.click("#orderOpenNaver"); await wait(400);
-    const pages = await p.browser().pages(); for (const x of pages) if (x !== p && x.url().includes("naver")) await x.close();
+    await p.click("#orderToMail"); await wait(250); await p.evaluate(() => $("orderOpenGmail").addEventListener("click", (e) => e.preventDefault())); // 테스트에서는 진짜 Gmail 을 열지 않음
+    await p.click("#orderOpenGmail"); await wait(400);
     await p.keyboard.press("Escape"); await reload();
     await p.click(".task-draft [data-task-alt]"); await wait(100); await p.click(".task-draft [data-task-alt]"); await wait(700);
     check("'안 보냈어요' 두 번 → 알림만 지움", !(await tasks()).some((t) => t.startsWith("보낸 발주 메일")));
@@ -860,6 +865,56 @@ SUITES.template = {
     await p.click("#openMailTemplate"); await wait(150);
     await p.click('[data-template-lang="en"]'); await wait(100);
     check("다시 열면 저장된 영어 양식", (await p.$eval("#mtSubject", (e) => e.value)).endsWith("#EN") && (await p.$eval("#mtBody", (e) => e.value)).includes("{{품목목록}}"));
+  },
+};
+
+// 구글 드라이브 폴더 흉내 (setup 묶음). 서버를 띄우기 전(seed)에 만들어 환경변수로 넘긴다
+let driveDir = null;
+
+SUITES.setup = {
+  title: "백업 · 새 PC 설정 (구글 드라이브 · 가져오기 · API 키)",
+  async seed() {
+    driveDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "mali-drive-"));
+    process.env.GOOGLE_DRIVE_DIR = driveDir;
+    return { "vendors.json": VENDORS, "inboundLabels.json": LABELS, "suppliers.json": { "2001": { vendorId: "gw", labelId: "kr" } } };
+  },
+  async run({ p, server }) {
+    const { hidden } = helpers(p);
+    const dataFile = (f) => path.join(server.dir, "data", f);
+    try {
+      const folder = path.join(driveDir, "아틀리에말리 백업");
+      const day = fs.readdirSync(folder).find((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+      check("서버 켜면 구글 드라이브에 백업 + 새 PC 설치 파일", !!day && fs.existsSync(path.join(folder, day, "vendors.json")) && fs.existsSync(path.join(folder, "새PC-설치하기.bat")));
+      check("API 키(.env)는 백업하지 않음", !fs.readdirSync(path.join(folder, day)).some((f) => /env/i.test(f)));
+      await helpers(p).closeAutoPopup();
+      check("데이터 있는 PC 는 새 PC 설정 창 안 뜸", await hidden("setupOverlay"));
+      await p.click("#openGuide"); await wait(200); await p.click('[data-guide-tab="move"]'); await wait(700);
+      check("가이드 '백업 · PC 옮기기' 탭에 구글 드라이브 백업 표시", (await p.$eval("#guideMove", (e) => e.textContent)).includes("구글 드라이브에도 백업하고 있어요"));
+      await p.keyboard.press("Escape"); await wait(150);
+
+      // 새 PC 흉내: data 가 비어 있으면 처음 열 때 설정 창 → 구글 드라이브 백업 가져오기
+      for (const f of ["vendors.json", "inboundLabels.json", "suppliers.json"]) fs.rmSync(dataFile(f), { force: true });
+      await p.goto(server.url, { waitUntil: "networkidle0" }); await wait(900);
+      check("데이터 없고 구글 드라이브 백업 있으면 새 PC 설정 창", !(await hidden("setupOverlay")) && (await p.$$("[data-restore-date]")).length === 1);
+      check("설정 창 위에 라벨 창 안 뜸", await hidden("labelOverlay"));
+      await p.click("[data-restore-date]"); await wait(1200);
+      const restored = JSON.parse(fs.readFileSync(dataFile("vendors.json"), "utf8"));
+      check("가져오기 → 예전 데이터 복원", restored.gw?.name === "글라스월드" && fs.existsSync(dataFile("suppliers.json")) && (await p.$$("#setupBody .setup-step.done")).length >= 1);
+
+      // USB 에서 파일 하나만 골라 가져오면 그 파일만 바뀐다 (나머지는 그대로)
+      fs.writeFileSync(dataFile("vendors.json"), JSON.stringify({ x: { name: "바뀐 업체", email: "" } }));
+      await p.evaluate(() => { document.querySelectorAll("#setupBody details").forEach((d) => (d.open = true)); });
+      await (await p.$("#setupFiles")).uploadFile(path.join(folder, day, "vendors.json")); await wait(1200);
+      check("파일로 가져오기 (고른 파일만)", JSON.parse(fs.readFileSync(dataFile("vendors.json"), "utf8")).gw?.name === "글라스월드" && fs.existsSync(dataFile("suppliers.json")));
+      check("가져오기 전 데이터는 따로 남겨 둠", fs.readdirSync(path.join(server.dir, "data", "backups")).some((d) => d.startsWith("가져오기전-")));
+
+      // 관리자 API 키: 비우면 저장 안 함
+      const status = await p.evaluate(() => fetch("/api/setup/naver-keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then((r) => r.status));
+      check("API 키를 비우면 저장 안 함", status === 400);
+    } finally {
+      delete process.env.GOOGLE_DRIVE_DIR;
+      fs.rmSync(driveDir, { recursive: true, force: true });
+    }
   },
 };
 

@@ -508,7 +508,8 @@ function render() {
 
   if (!hasAutoOpenedLabelPopup) {
     hasAutoOpenedLabelPopup = true;
-    if (unlabeledCount) openLabelManager();
+    // 새 PC 설정 창을 띄울지 확인한 뒤에, 그 창이 없을 때만 (설정 창 위에 라벨 창이 겹치지 않게)
+    setupChecked.then(() => { if (unlabeledCount && $("setupOverlay").hidden) openLabelManager(); });
   }
 }
 
@@ -963,7 +964,8 @@ function todayText() {
 // ── 발주서 만들기 ───────────────────────────────────
 // 1) 업체 선택 화면 → 2) 그 업체 품목 화면(발주 필요 품목은 미리 체크, 위쪽에 선택 요약·다음 버튼 고정) → 3) 메일.
 // 수량을 고쳐서
-// 메일 한 통 분량의 받는 사람 · 제목 · 본문을 만든다. 웹메일에 붙여넣기 쉽게 각각 복사 버튼을 둔다.
+// 메일 한 통 분량의 받는 사람 · 제목 · 본문을 만든다. 매장은 Gmail 을 써서, 이 내용이 채워진 Gmail 쓰기 창을 연다.
+// (Gmail 에서 안 채워지거나 다른 메일을 쓸 때를 위해 칸마다 복사 버튼도 둔다)
 
 const order = {
   vendorId: "",
@@ -1287,7 +1289,7 @@ function renderOrderMail() {
       <button class="btn-ghost btn-sm" id="orderBack">← 품목 다시 고르기</button>
       <span class="spacer"></span>
       <button class="btn-ghost btn-sm" id="orderMailto">PC 메일 프로그램으로 열기</button>
-      <a class="btn-primary btn-sm" id="orderOpenNaver" href="https://mail.naver.com/" target="_blank" rel="noopener">네이버 메일 열기</a>
+      <a class="btn-primary btn-sm" id="orderOpenGmail" href="https://mail.google.com/" target="_blank" rel="noopener">Gmail로 보내기</a>
     </div>
     <div class="record-bar ${order.recorded ? "done" : ""}">
       <div class="record-text">
@@ -1299,9 +1301,8 @@ function renderOrderMail() {
     </div>
     <div class="order-pane">
     <ol class="mail-steps">
-      <li>위 <b>네이버 메일 열기</b>를 눌러 메일 쓰기 화면을 열어요.</li>
-      <li>아래 <b>받는 사람 · 제목 · 본문</b>을 차례로 <b>복사</b>해서 붙여넣어요.</li>
-      <li>내용을 확인하고 네이버 메일에서 <b>보내기</b>를 눌러요.</li>
+      <li>위 <b>Gmail로 보내기</b>를 누르면 받는 사람 · 제목 · 본문이 채워진 Gmail 쓰기 창이 열려요.</li>
+      <li>내용을 확인하고 Gmail에서 <b>보내기</b>를 눌러요. (칸이 비어 있으면 아래 <b>복사</b> 버튼으로 붙여넣으세요)</li>
       <li>보냈으면 위 <b>발주 완료로 처리</b>를 눌러요.</li>
     </ol>
     <div class="mail-field">
@@ -1321,7 +1322,12 @@ function renderOrderMail() {
   `;
   $("orderRecord").addEventListener("click", recordCurrentOrder);
   order.draftSaved = false; // 품목을 다시 골랐을 수 있으니 이 메일 화면에서 다시 저장
-  $("orderOpenNaver").addEventListener("click", saveOrderDraft);
+  // 누르는 순간의 칸 내용(고친 내용 포함)으로 Gmail 쓰기 주소를 만든다
+  $("orderOpenGmail").addEventListener("click", (e) => {
+    saveOrderDraft();
+    const q = new URLSearchParams({ view: "cm", fs: "1", to: $("orderTo").value.trim(), su: $("orderSubject").value, body: $("orderMailBody").value });
+    e.currentTarget.href = `https://mail.google.com/mail/?${q.toString()}`;
+  });
   document.querySelectorAll("[data-copy]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       saveOrderDraft();
@@ -2152,6 +2158,8 @@ function setGuideTab(tab) {
   document.querySelectorAll("[data-guide-tab]").forEach((t) => t.classList.toggle("active", t.dataset.guideTab === tab));
   $("guideUpdates").hidden = tab !== "updates";
   $("guideHowto").hidden = tab !== "howto";
+  $("guideMove").hidden = tab !== "move";
+  if (tab === "move") renderMovePane();
 }
 
 async function openGuide() {
@@ -2171,6 +2179,222 @@ async function openGuide() {
       // 저장에 실패하면 다음에 다시 강조될 뿐이라 조용히 넘어간다
     }
   }
+}
+
+// ── 백업 · 새 PC 설정 ───────────────────────────────
+// 매일 백업(이 PC + 구글 드라이브). 새 PC 에서는 구글 드라이브의 '새PC-설치하기'로 설치한 뒤
+// 처음 열 때 '새 PC 설정' 창이 떠서 백업을 가져오고, 네이버 API 키(백업에 없음)는 관리자에게 요청한다.
+
+let setupState = null; // /api/setup 결과
+let setupChecked = Promise.resolve(); // 처음 열 때 새 PC 설정 확인이 끝나면 풀림
+let setupIp = null; // 이 PC 인터넷 주소 (관리자에게 보낼 메시지용)
+
+async function loadSetupStatus() {
+  setupState = await fetchJson("/api/setup");
+  return setupState;
+}
+
+// 새로 설치한 PC: API 키가 없거나(샘플 모드 아님), 데이터가 없는데 구글 드라이브에 백업이 있을 때
+function needsSetup(s) {
+  return (!s.keysSet && !s.mockMode) || (!s.hasData && (s.driveBackups || []).length > 0);
+}
+
+async function checkSetup() {
+  try {
+    if (needsSetup(await loadSetupStatus())) openSetup();
+  } catch {
+    // 확인을 못 해도 평소 화면은 그대로 쓴다
+  }
+}
+
+async function openSetup() {
+  if (!setupState) await loadSetupStatus().catch(() => {});
+  renderSetup();
+  openModal("setupOverlay");
+  if (!setupIp) {
+    fetchJson("/api/setup/ip").then((r) => {
+      setupIp = r.ip;
+      if (!$("setupOverlay").hidden && $("setupAdminMsg")) $("setupAdminMsg").value = adminMessage(setupState || {});
+    }).catch(() => {});
+  }
+}
+
+function backupLabel(b) {
+  return `${b.date.slice(5).replace("-", "/")} · ${b.pc || "PC"} · 업체 ${b.vendors}곳 · 품목 ${b.items}개 · 발주 기록 ${b.orders}건`;
+}
+
+function adminMessage(s) {
+  const ip = setupIp || "(확인 중)";
+  if (s.keysSet && s.naver && s.naver.ok === false) {
+    return `재고 발주 도우미를 새 PC(${s.pc})로 옮겼는데 네이버 연결이 안 돼요.\n${s.naver.message}\n이 PC 인터넷 주소: ${ip}`;
+  }
+  return `재고 발주 도우미를 새 PC(${s.pc})에 설치했어요. 네이버 API 키를 넣어 주세요.\n이 PC 인터넷 주소: ${ip}`;
+}
+
+function renderSetup() {
+  const s = setupState || {};
+  const dataDone = !!s.hasData;
+  const naverDone = !!s.mockMode || (!!s.keysSet && s.naver?.ok !== false);
+  const backups = (s.driveBackups || []).slice(0, 5);
+  const backupList = s.drive
+    ? backups.length
+      ? `<div class="setup-backups">${backups.map((b, i) => `
+          <div class="setup-backup">
+            <span>${escapeHtml(backupLabel(b))}${i === 0 ? ` <span class="new-badge">최신</span>` : ""}</span>
+            <button class="${i === 0 && !dataDone ? "btn-primary" : "btn-outline"} btn-sm" data-restore-date="${escapeHtml(b.date)}">가져오기</button>
+          </div>`).join("")}</div>`
+      : `<p class="muted small">구글 드라이브에 백업이 아직 없어요. 예전 PC에서 프로그램을 한 번 켜면 백업돼요.</p>`
+    : `<div class="warn-box"><span>구글 드라이브를 찾지 못했어요. 구글 드라이브 앱을 설치하고 예전 PC와 <b>같은 계정</b>으로 로그인한 뒤 <b>다시 찾기</b>를 누르세요.</span><button class="btn-outline btn-sm" id="setupRecheck">다시 찾기</button></div>`;
+  $("setupBody").innerHTML = `
+    <h3>새 PC 설정</h3>
+    <p class="modal-desc">예전 PC의 데이터를 가져오고 네이버 연결을 확인해요. 두 가지가 모두 ✓가 되면 끝이에요.</p>
+    <section class="setup-step ${dataDone ? "done" : ""}">
+      <h4><span class="step-mark">${dataDone ? "✓" : "1"}</span>예전 PC 데이터 가져오기</h4>
+      ${dataDone ? `<p class="muted small">데이터가 들어 있어요. 다른 백업으로 바꾸려면 아래에서 고르세요.</p>` : ""}
+      ${backupList}
+      <details class="setup-more">
+        <summary>USB 등 파일로 가져오기</summary>
+        <p class="muted small">백업 폴더(구글 드라이브 '아틀리에말리 백업' 또는 프로그램 폴더의 data\\backups) 안 날짜 폴더의 .json 파일을 <b>모두</b> 고르세요.</p>
+        <input type="file" id="setupFiles" accept=".json,application/json" multiple />
+      </details>
+    </section>
+    <section class="setup-step ${naverDone ? "done" : ""}">
+      <h4><span class="step-mark">${naverDone ? "✓" : "2"}</span>네이버 연결 (관리자에게 요청)</h4>
+      ${naverDone
+        ? `<p class="muted small">${s.mockMode ? "샘플 데이터로 실행 중이에요." : "네이버와 연결돼 있어요."}</p>`
+        : `<p class="muted small">네이버 API 키는 백업에 들어 있지 않아요. 아래 메시지를 복사해서 관리자에게 카톡으로 보내주세요.</p>
+          <div class="setup-message">
+            <textarea id="setupAdminMsg" class="input" rows="3" readonly>${escapeHtml(adminMessage(s))}</textarea>
+            <button class="btn-primary btn-sm" id="setupCopyMsg">메시지 복사</button>
+          </div>`}
+      <details class="setup-more" ${!naverDone && s.keysSet ? "open" : ""}>
+        <summary>관리자용: 네이버 API 키 넣기</summary>
+        <div class="form-grid">
+          <label class="field">client_id<input id="setupClientId" class="input" autocomplete="off" /></label>
+          <label class="field">client_secret<input id="setupClientSecret" class="input" type="password" autocomplete="off" /></label>
+        </div>
+        <div class="setup-key-actions">
+          <button class="btn-outline btn-sm" id="setupSaveKeys">저장하고 연결 확인</button>
+          <span class="muted small" id="setupKeyState"></span>
+        </div>
+      </details>
+    </section>
+    <div class="modal-actions"><button class="btn-primary" id="setupDone">${dataDone && naverDone ? "시작하기" : "나중에 할게요"}</button></div>
+  `;
+
+  document.querySelectorAll("#setupBody [data-restore-date]").forEach((btn) => {
+    const run = () => restoreBackup(btn, { source: "drive", date: btn.dataset.restoreDate });
+    // 이미 데이터가 있으면 덮어쓰니까 한 번 더 확인
+    btn.addEventListener("click", () => (dataDone ? confirmClick(btn, "한 번 더 누르면 바꾸기", run) : run()));
+  });
+  $("setupRecheck")?.addEventListener("click", async () => {
+    await loadSetupStatus().catch(() => {});
+    renderSetup();
+  });
+  $("setupFiles").addEventListener("change", async (e) => {
+    const files = {};
+    for (const file of e.target.files) files[file.name] = await file.text();
+    if (Object.keys(files).length) restoreBackup(e.target, { files });
+  });
+  $("setupCopyMsg")?.addEventListener("click", async () => {
+    const ok = await copyText($("setupAdminMsg").value);
+    toast(ok ? "메시지를 복사했어요. 카톡에 붙여넣어 관리자에게 보내주세요" : "복사하지 못했어요. 글자를 직접 선택해서 복사해주세요", ok ? undefined : "error");
+  });
+  $("setupSaveKeys").addEventListener("click", saveSetupKeys);
+  $("setupDone").addEventListener("click", () => {
+    closeModal("setupOverlay");
+    if (dataDone && naverDone) loadProducts({ fresh: 1 });
+  });
+}
+
+async function restoreBackup(el, body) {
+  el.disabled = true;
+  try {
+    const r = await postJson("/api/setup/restore", "POST", body);
+    toast(`예전 PC 데이터를 가져왔어요 (${r.restored.length}개 파일)`);
+  } catch (err) {
+    toast(err.message || "가져오지 못했어요.", "error");
+    el.disabled = false;
+    return;
+  }
+  await loadSetupStatus().catch(() => {});
+  renderSetup();
+  loadProducts();
+}
+
+async function saveSetupKeys() {
+  const btn = $("setupSaveKeys");
+  btn.disabled = true;
+  $("setupKeyState").textContent = "연결 확인 중…";
+  let r;
+  try {
+    r = await postJson("/api/setup/naver-keys", "POST", { clientId: $("setupClientId").value, clientSecret: $("setupClientSecret").value });
+  } catch (err) {
+    $("setupKeyState").textContent = err.message || "저장하지 못했어요.";
+    btn.disabled = false;
+    return;
+  }
+  if (r.ip) setupIp = r.ip;
+  await loadSetupStatus().catch(() => {});
+  if (r.ok) {
+    toast("네이버와 연결됐어요");
+    renderSetup();
+    loadProducts({ fresh: 1 });
+  } else {
+    // 키는 저장됐지만 연결 실패 (주로 허용 IP) → 메시지에 이유 · 주소가 들어가게
+    setupState = { ...setupState, naver: { ok: false, message: r.message } };
+    renderSetup();
+    $("setupKeyState").textContent = `키는 저장했어요. 하지만 연결이 안 돼요: ${r.message}`;
+  }
+}
+
+// 가이드 창 '백업 · PC 옮기기' 탭
+async function renderMovePane() {
+  const box = $("guideMove");
+  box.innerHTML = `<div class="empty-note">확인하는 중…</div>`;
+  let s;
+  try {
+    s = await loadSetupStatus();
+  } catch (err) {
+    box.innerHTML = `<div class="empty-note error-note"><strong>백업 상태를 불러오지 못했어요</strong>${escapeHtml(err.message || "")}</div>`;
+    return;
+  }
+  const last = s.driveBackups[0] || null;
+  box.innerHTML = `
+    <section class="guide-section">
+      <h4>자동 백업</h4>
+      ${s.drive
+        ? `<div class="info-box"><span>✓ 매일 <b>구글 드라이브</b>에도 백업하고 있어요 · 마지막 ${last ? escapeHtml(last.date) : "아직 없음"}<br><span class="muted small">${escapeHtml(s.driveFolder)}</span></span></div>`
+        : `<div class="warn-box"><span>이 PC에서 구글 드라이브를 찾지 못해서 <b>이 PC 안에만</b> 백업하고 있어요. PC가 고장 나면 데이터가 사라질 수 있어요. 구글 드라이브 앱을 설치하고 로그인하면 구글 드라이브에도 자동으로 백업돼요.</span></div>`}
+      <p class="muted small">업체 · 라벨 · 품목 연결 · 발주 기록 · 메일 양식 · 판단 기준을 하루에 한 번 백업해요. 네이버 API 키는 백업하지 않아요.</p>
+      <button class="btn-outline btn-sm" id="backupNow">지금 백업하기</button>
+    </section>
+    <section class="guide-section">
+      <h4>새 PC로 옮기는 방법</h4>
+      <ol>
+        <li>새 PC에 <b>구글 드라이브</b> 앱을 설치하고 이 PC와 <b>같은 계정</b>으로 로그인해요.</li>
+        <li>구글 드라이브의 <b>'아틀리에말리 백업'</b> 폴더에서 <b>'새PC-설치하기'</b>를 더블클릭해요. 파란 경고 창이 뜨면 <b>추가 정보 → 실행</b>. 설치가 끝나면 프로그램이 저절로 열려요.</li>
+        <li>열린 <b>'새 PC 설정'</b> 창에서 가장 최근 백업의 <b>가져오기</b>를 눌러요.</li>
+        <li>같은 창에서 <b>메시지 복사</b>를 눌러 관리자에게 카톡으로 보내요. 관리자가 네이버 연결을 마무리해 줘요.</li>
+        <li>새 PC에서 잘 되면 이 PC는 더 쓰지 않아요. 두 PC에서 같이 쓰면 발주 기록이 따로 쌓여요.</li>
+      </ol>
+      <p class="muted small">구글 드라이브를 쓸 수 없으면: <a href="/api/setup/installer" download>설치 파일 받기</a>와 이 PC의 백업 폴더(${escapeHtml(s.localFolder || "")})를 USB로 옮긴 뒤, 새 PC 설정 창의 '파일로 가져오기'를 쓰세요.</p>
+      <button class="btn-ghost btn-sm" id="openSetupFromGuide">새 PC 설정 창 열기</button>
+    </section>`;
+  $("backupNow").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await postJson("/api/backup/now", "POST", {});
+      toast(r.drive ? "구글 드라이브와 이 PC에 백업했어요" : r.drive === false ? "이 PC에는 백업했는데 구글 드라이브 백업은 실패했어요" : "이 PC에 백업했어요");
+    } catch (err) {
+      toast(err.message || "백업하지 못했어요.", "error");
+    }
+    renderMovePane();
+  });
+  $("openSetupFromGuide").addEventListener("click", () => {
+    closeModal("guideOverlay");
+    openSetup();
+  });
 }
 
 // ── 이벤트 연결 ─────────────────────────────────────
@@ -2255,6 +2479,7 @@ function syncTopbarHeight() {
 syncTopbarHeight();
 window.addEventListener("resize", syncTopbarHeight);
 
+setupChecked = checkSetup();
 loadProducts();
 loadWhatsNew().catch((err) => console.error("업데이트 기록을 불러오지 못했어요:", err));
 loadListView();

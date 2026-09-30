@@ -392,4 +392,18 @@ async function fetchRecentOrders(days) {
     .map(({ productId, quantity, optionText, orderedAt }) => ({ productId, quantity, optionText, orderedAt }));
 }
 
-module.exports = { fetchProducts, fetchRecentOrders, getAccessToken };
+// 새 PC 에서 API 키를 넣은 뒤: 예전 키로 받은 토큰은 버린다
+function resetAuth() {
+  cachedToken = null;
+}
+
+// 키 · 허용 IP 가 맞는지 가볍게 확인 (토큰 발급 + 상품 1개 조회). 실패하면 네이버 에러를 그대로 던진다
+async function checkConnection() {
+  await authedFetch(API_ENDPOINTS.productSearch, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ page: 1, size: 1 }),
+  });
+}
+
+module.exports = { fetchProducts, fetchRecentOrders, getAccessToken, resetAuth, checkConnection };

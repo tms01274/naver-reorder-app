@@ -19,12 +19,13 @@
 | `src/orders.js` | 발주 기록(`data/orders.json`). 입고 안 된 수량은 `/api/products` 에서 들어올 재고로 더해 발주 필요·권장 수량을 다시 계산(`applyPendingOrder`). 발주할 때 네이버 재고(`stockAtOrder`)를 남겨 두고, 팔린 수량을 빼고도 재고가 발주 수량의 절반 이상 늘면 **자동 입고**(`autoReceiveArrived`, 되돌리면 `noAuto`). 업체별 실제 발주 간격(`orderIntervalsByVendor`). 스토어에서 사라진 품목의 발주는 화면에 "스토어에 없는 품목"으로 표시 |
 | `src/orderDrafts.js` | 메일을 복사했는데 '발주 완료로 처리'를 안 한 발주서(`data/order-drafts.json`, 업체별). 첫 화면 '오늘 할 일'에 알림, 처리하면 지워짐 |
 | `src/vendors.js` | 거래 업체(이름·이메일). 서버 시작 시 예전 품목별 업체명/이메일을 업체 목록으로 옮김 |
-| 발주 흐름 | 화면의 "발주서 만들기": 업체 선택 → 그 업체 품목(발주 필요는 미리 체크)·수량 수정 → 메일 한 통 분량 생성 → 받는 사람·제목·본문 각각 복사해 **네이버 웹메일**에 붙여넣기 (매장은 웹메일 사용, 앱이 직접 발송하지 않음). 메일 양식은 `{{품목목록}}` 필수 |
+| 발주 흐름 | 화면의 "발주서 만들기": 업체 선택 → 그 업체 품목(발주 필요는 미리 체크)·수량 수정 → 메일 한 통 분량 생성 → **'Gmail로 보내기'** 가 받는 사람·제목·본문이 채워진 Gmail 쓰기 창(`mail.google.com/mail/?view=cm&to&su&body`)을 연다 (매장은 Gmail 사용, 앱이 직접 발송하지 않음. 칸마다 복사 버튼도 있음). 메일 양식은 `{{품목목록}}` 필수 |
 | 해외 업체 | 업체마다 발주서 언어(`lang`: ko/en/zh). 메일 양식은 언어별(`src/mailTemplate.js` 의 `DEFAULT_TEMPLATES`, 자리표시자는 언어 상관없이 한글 키). 품목별 `vendorItemName`(업체용 품명)이 있으면 발주서에 그 이름 사용 — 자동 번역은 하지 않음. 보내는 사람: `SENDER_NAME`(ko) / `SENDER_NAME_EN`(en·zh) |
 | `src/naverClient.js` | 네이버 커머스API. 판매중(SALE)·품절(OUTOFSTOCK) 상품만. **옵션 상품은 옵션마다 한 줄**(id `상품번호_옵션번호`, `parentId`) — 옵션 재고는 원상품 상세(`/v2/products/origin-products/{no}`)에만 있어 `data/naver-options.json` 에 캐시하고 바뀐 상품만 다시 조회(처음엔 최대 8초만 기다리고 나머지는 뒤에서). 주문은 하루 단위로만 조회돼서 날짜별로 `data/naver-orders.json` 에 캐시, 최근 7일만 매번 다시 받음. 네이버 호출 제한은 초당 3회 정도(429 는 `authedFetch` 가 쉬었다 재시도) |
 | `src/productOptions.js` | 주문의 `productOption`("색상: 021 Yellow")을 옵션 줄에 맞춤, 옵션 줄이 상품(또는 같은 상품 다른 옵션)의 업체·라벨을 이어받음 |
 | `src/stockWatch.js` | 발주 기록 없이 네이버 재고가 늘어난 품목 감지(`data/stock-watch.json`) → 오늘 할 일 "재고가 늘었는데 발주 기록이 없어요" → '발주였어요'면 늦게 기록(`lateRecord`, 발주일 = 감지일 − 리드타임) |
-| `src/backup.js` | `data/*.json` 을 하루 한 번 `data/backups/날짜/` 로 복사, 14일치 보관 |
+| `src/backup.js` | `data/*.json`(옮길 파일 목록 `DATA_FILES`) 을 하루 한 번 `data/backups/날짜/`(14일) + **구글 드라이브** `아틀리에말리 백업/날짜/`(30일)로 복사, 드라이브 폴더에 `새PC-설치하기.bat` 도 둔다. 구글 드라이브는 `G:\내 드라이브`·`~/내 드라이브` 등을 찾음(테스트는 `GOOGLE_DRIVE_DIR`). .env(API 키)는 백업 안 함 |
+| `src/setup.js`, `새PC-설치하기.bat` | 새 PC 로 옮기기. 설치 파일: winget 으로 Git·Node.js → `C:\naver-reorder-app` 에 clone → `설치하기.bat` (UTF-8 BOM 없음 + CRLF + `chcp 65001`, `설치하기.bat` 과 같은 방식). 화면 '새 PC 설정' 창(데이터 없고 드라이브 백업 있거나 API 키 없으면 자동으로 뜸): 백업 가져오기(`/api/setup/restore`, 가져오기 전 데이터는 `data/backups/가져오기전-*`), 관리자에게 보낼 메시지(PC 이름·공인 IP), 관리자가 API 키 입력(`/api/setup/naver-keys` → .env 저장 후 서버 재시작 없이 실제 모드로). 새 설치는 `.env.example` 의 `MOCK_MODE=false` |
 | `src/mockData.js` | `MOCK_MODE=true` 일 때 샘플 데이터 |
 | `src/reorderLogic.js` | 판매 속도·남은 일수·권장 수량 계산. 발주 필요 = 남은 일수 ≤ 리드타임 + 안전 여유. 권장 = 하루 판매 × (리드타임 + 여유 + 발주 간격) − 재고 → 최소 주문 수량·묶음 단위(품목별 `minOrderQty`·`packSize`)로 올림. 발주 간격은 업체에 직접 정한 값 → 발주 기록에서 자동(`orderIntervalsByVendor`, 발주 3번부터 중간값) → 기본값(판단 기준, 14일) |
 | `src/changelog.js` | 앱 안 "업데이트 내용" 기록 (최신이 맨 위) |
@@ -48,7 +49,7 @@
    있으면 작업 내용을 보존한 채 받아서 합친다 (`git stash` → `git merge --ff-only origin/main` 또는 `git pull --rebase` → `git stash pop`, 충돌은 양쪽 변경을 모두 살려서 해결). 받은 내용을 사용자에게 한 줄로 알린다.
 2. **지난 push 이후 추가·수정된 기능의 테스트 묶음만** 돌린다 (관리자 지시: 전체 테스트는 오래 걸림). `cd docs/tools && node e2e-test.js <묶음...>` — 묶음 목록은 `node e2e-test.js --list`.
    - 새 기능/바뀐 동작은 해당 묶음에 검사를 추가·수정한 뒤 그 묶음을 돌린다. 한 번 통과하면 된다 (여러 번 반복하지 않음).
-   - 어느 묶음인지: 라벨 관리 → `labels`, 첫 화면 목록·통계 → `main`, 업체 관리 → `vendors`, 발주서 → `order`, 발주 기록·입고 대기 → `records`, 품목 상세 → `detail`, 해외 업체·언어 → `overseas`, 판단 기준 → `settings`, 메일 양식 → `template`, 가이드·업데이트 기록 → `whatsnew`, 데이터 형식·옮기기 → `migration`, 오늘 할 일 카드·표/사진 보기 → `today`, 네이버 응답 해석(`src/naverClient.js`) → `naver`, 첫 화면 발주 완료 처리·자동 입고·깜빡 알림(`src/orders.js`, `src/orderDrafts.js`) → `monitor`, 공통 화면(팝업 구조, CSS, id) → `layout`.
+   - 어느 묶음인지: 라벨 관리 → `labels`, 첫 화면 목록·통계 → `main`, 업체 관리 → `vendors`, 발주서 → `order`, 발주 기록·입고 대기 → `records`, 품목 상세 → `detail`, 해외 업체·언어 → `overseas`, 판단 기준 → `settings`, 메일 양식 → `template`, 가이드·업데이트 기록 → `whatsnew`, 데이터 형식·옮기기 → `migration`, 오늘 할 일 카드·표/사진 보기 → `today`, 네이버 응답 해석(`src/naverClient.js`) → `naver`, 첫 화면 발주 완료 처리·자동 입고·깜빡 알림(`src/orders.js`, `src/orderDrafts.js`) → `monitor`, 백업·새 PC 설정(`src/backup.js`, `src/setup.js`) → `setup`, 공통 화면(팝업 구조, CSS, id) → `layout`.
    - 여러 화면이 함께 쓰는 코드(`fetchJson`, `render`, 공통 팝업, `server.js` 의 `/api/products` 등)를 고쳤을 때만 전체(`node e2e-test.js`)를 돌린다.
 3. **지난 push 이후 바뀐 프로그램 내용을 한꺼번에 `src/changelog.js` 맨 위에 정리**한다. 관리자가 따로 말하지 않아도 매번 한다.
    - 매장 PC 사용자(비개발자)가 읽는 글: 쉬운 해요체, 무엇이 달라졌고 어떻게 쓰는지 위주. 내부 구조·파일명·버그 원인 같은 개발 용어는 쓰지 않는다.
