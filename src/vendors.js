@@ -4,7 +4,8 @@ const path = require("path");
 // 거래 업체 목록. 품목은 data/suppliers.json 의 vendorId 로 업체 하나에 연결된다.
 const FILE_PATH = path.join(__dirname, "..", "data", "vendors.json");
 
-// data 구조: { [vendorId]: { name, email, lang } }  lang: 발주서 언어 ko | en | zh (없으면 ko)
+// data 구조: { [vendorId]: { name, email, lang, orderCycleDays? } }  lang: 발주서 언어 ko | en | zh (없으면 ko)
+// orderCycleDays: 이 업체에 보통 며칠 간격으로 발주하는지 (없으면 판단 기준의 기본 발주 간격)
 
 function readAll() {
   if (!fs.existsSync(FILE_PATH)) return {};
@@ -28,15 +29,16 @@ function newId() {
   return "vendor_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-function createVendor({ name, email, lang = "ko" }) {
+function createVendor({ name, email, lang = "ko", orderCycleDays }) {
   const all = readAll();
   const id = newId();
-  all[id] = { name, email, lang };
+  all[id] = { name, email, lang, ...(orderCycleDays !== undefined && orderCycleDays !== null ? { orderCycleDays } : {}) };
   writeAll(all);
   return { id, ...all[id] };
 }
 
-function updateVendor(id, { name, email, lang }) {
+// orderCycleDays: null 이면 지워서 기본 발주 간격을 쓰게 한다
+function updateVendor(id, { name, email, lang, orderCycleDays }) {
   const all = readAll();
   if (!all[id]) return null;
   all[id] = {
@@ -44,7 +46,9 @@ function updateVendor(id, { name, email, lang }) {
     ...(name !== undefined ? { name } : {}),
     ...(email !== undefined ? { email } : {}),
     ...(lang !== undefined ? { lang } : {}),
+    ...(orderCycleDays !== undefined ? { orderCycleDays } : {}),
   };
+  if (all[id].orderCycleDays === null) delete all[id].orderCycleDays;
   writeAll(all);
   return { id, ...all[id] };
 }

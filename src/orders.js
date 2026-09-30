@@ -7,7 +7,7 @@ const FILE_PATH = path.join(__dirname, "..", "data", "orders.json");
 // data 구조: { [orderId]: { vendorId("" = 업체 미지정), vendorName, createdAt, direct?(발주서 없이 첫 화면에서 기록), items: [
 //   { productId, name, vendorItemName?, qty, stockAtOrder?(발주할 때 네이버 재고), stockAtTime?(그 재고를 본 시각, 없으면 발주 시각),
 //     expectedAt, receivedAt?, autoReceived?(재고가 늘어서 자동 입고), stockAtReceive?,
-//     noAuto?(자동 입고를 사람이 되돌림 → 다시 자동 처리 안 함), stockChecked?("재고 올렸어요" 확인함) } ] } }
+//     noAuto?(자동 입고를 사람이 되돌림 → 다시 자동 처리 안 함) } ] } }
 // vendorName · name 은 기록 당시 이름을 남겨둔다 (나중에 업체/품목 이름이 바뀌어도 기록은 그대로).
 
 function readAll() {
@@ -30,10 +30,14 @@ function listOrders() {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-function createOrder({ vendorId, vendorName, items, direct }) {
+// createdAt: 늦게 기록할 때 발주했을 법한 날짜 (없으면 지금). lateRecord: 재고가 늘어난 걸 보고 나중에 기록한 발주
+function createOrder({ vendorId, vendorName, items, direct, createdAt, lateRecord }) {
   const all = readAll();
   const id = "order_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  all[id] = { vendorId, vendorName, createdAt: new Date().toISOString(), ...(direct ? { direct: true } : {}), items };
+  all[id] = {
+    vendorId, vendorName, createdAt: createdAt || new Date().toISOString(),
+    ...(direct ? { direct: true } : {}), ...(lateRecord ? { lateRecord: true } : {}), items,
+  };
   writeAll(all);
   return { id, ...all[id] };
 }
@@ -133,7 +137,9 @@ function fillMissingBaselines(all, stockById, nowIso) {
 
 // 재고가 늘어난 품목은 자동으로 입고 처리한다. 사람은 스마트스토어 재고만 올리면 된다.
 // 같은 품목을 여러 번 발주했으면 먼저 한 발주부터, 늘어난 양을 나눠 쓴다 (한 번 들어온 걸로 두 발주를 다 처리하지 않게).
+// 돌려주는 값: 이번에 입고 처리한 품목 id (Set)
 function autoReceiveArrived(stockById, soldSince) {
+  const received = new Set();
   const all = readAll();
   const nowIso = new Date().toISOString();
   let changed = fillMissingBaselines(all, stockById, nowIso);
@@ -153,9 +159,11 @@ function autoReceiveArrived(stockById, soldSince) {
     item.autoReceived = true;
     item.stockAtReceive = stockNow;
     used[item.productId] = (used[item.productId] || 0) + item.qty;
+    received.add(item.productId);
     changed = true;
   }
   if (changed) writeAll(all);
+  return received;
 }
 
 // 최근 며칠 안에 자동 입고된 품목: { [productId]: { receivedAt, qty } } — 화면에 "자동 입고됨" 표시용
@@ -172,31 +180,42 @@ function recentAutoReceipts(days = 3) {
   return result;
 }
 
-// 사람이 "입고"를 눌렀는데 반나절이 지나도 네이버 재고가 안 늘어난 품목 (스마트스토어 재고 올리기를 깜빡한 경우).
-// 입고 뒤 2주까지만 본다. "이미 올렸어요"를 누르면(stockChecked) 더 안 알린다.
-function receivedButStockNotRaised(stockById, soldSince) {
-  const now = Date.now();
-  const list = [];
-  for (const [id, o] of Object.entries(readAll())) {
+// 최근 며칠 안에 사람이 "입고"를 눌러 처리한 품목 (Set). 그 뒤 재고가 늘어도 기록 없는 발주로 보지 않게
+function recentlyReceivedByHand(days = 7) {
+  const cutoff = Date.now() - days * DAY;
+  const ids = new Set();
+  for (const o of Object.values(readAll())) {
     for (const item of o.items) {
-      if (!item.receivedAt || item.autoReceived || item.stockChecked || item.stockAtOrder === undefined) continue;
-      const age = now - new Date(item.receivedAt).getTime();
-      if (age < DAY / 2 || age > 14 * DAY) continue;
-      const stockNow = stockById[item.productId];
-      if (stockNow === undefined || stockRise(item, o.createdAt, stockNow, soldSince) >= arrivalThreshold(item.qty)) continue;
-      list.push({ orderId: id, productId: item.productId, name: item.name, qty: item.qty, receivedAt: item.receivedAt });
+      if (item.receivedAt && !item.autoReceived && new Date(item.receivedAt).getTime() >= cutoff) ids.add(item.productId);
     }
   }
-  return list;
+  return ids;
 }
 
-function markStockChecked(id, productId) {
-  const all = readAll();
-  const item = all[id]?.items.find((i) => i.productId === productId);
-  if (!item) return null;
-  item.stockChecked = true;
-  writeAll(all);
-  return { id, ...all[id] };
+// 업체마다 실제로 며칠 간격으로 발주했는지 (사람이 발주 간격을 입력하지 않아도 되게, 발주 기록에서 알아낸다)
+// 같은 날 여러 번 기록한 건 한 번으로 보고, 최근 발주 INTERVAL_SAMPLE 번 사이 간격의 중간값을 쓴다
+// (가끔 급하게 연달아 주문하거나 한참 쉬어도 크게 흔들리지 않게). 간격이 2개 미만(발주 3번 미만)이면 모름.
+// → { [vendorId]: { days, orders(센 발주 수) } }
+const INTERVAL_SAMPLE = 6;
+
+function orderIntervalsByVendor() {
+  const daysByVendor = {};
+  for (const o of Object.values(readAll())) {
+    if (!o.vendorId) continue;
+    const d = new Date(o.createdAt);
+    d.setHours(0, 0, 0, 0);
+    (daysByVendor[o.vendorId] ||= new Set()).add(d.getTime());
+  }
+  const result = {};
+  for (const [vendorId, set] of Object.entries(daysByVendor)) {
+    const days = [...set].sort((a, b) => a - b).slice(-INTERVAL_SAMPLE);
+    if (days.length < 3) continue;
+    const gaps = days.slice(1).map((t, i) => Math.round((t - days[i]) / DAY)).sort((a, b) => a - b);
+    const mid = gaps.length / 2;
+    const median = gaps.length % 2 ? gaps[Math.floor(mid)] : (gaps[mid - 1] + gaps[mid]) / 2;
+    result[vendorId] = { days: Math.round(median), orders: days.length };
+  }
+  return result;
 }
 
 // 품목별로 아직 입고 안 된 발주 합계: { [productId]: { qty, orderedAt(가장 이른), expectedAt(가장 이른), count } }
@@ -217,5 +236,5 @@ function pendingByProduct() {
 
 module.exports = {
   listOrders, createOrder, receiveOrder, unreceiveItem, updateItemQty, removeItem, deleteOrder, pendingByProduct,
-  autoReceiveArrived, recentAutoReceipts, receivedButStockNotRaised, markStockChecked,
+  autoReceiveArrived, recentAutoReceipts, orderIntervalsByVendor, recentlyReceivedByHand,
 };

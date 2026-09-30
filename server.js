@@ -4,13 +4,16 @@ const path = require("path");
 const fs = require("fs");
 const { execFile } = require("child_process");
 
-const { computeReorderList } = require("./src/reorderLogic");
+const { computeReorderList, roundOrderQty } = require("./src/reorderLogic");
+const { assignOrdersToOptionRows, inheritParentInfo } = require("./src/productOptions");
+const { startDailyBackup } = require("./src/backup");
 const { getAllSuppliers, upsertSupplier, clearFieldFromAll, setFieldForProducts, migrateSuppliers } = require("./src/suppliers");
 const { getAllVendors, createVendor, updateVendor, deleteVendor, migrateLegacySupplierFields } = require("./src/vendors");
 const {
   listOrders, createOrder, receiveOrder, unreceiveItem, updateItemQty, removeItem, deleteOrder, pendingByProduct,
-  autoReceiveArrived, recentAutoReceipts, receivedButStockNotRaised, markStockChecked,
+  autoReceiveArrived, recentAutoReceipts, orderIntervalsByVendor, recentlyReceivedByHand,
 } = require("./src/orders");
+const { detectUnrecordedArrivals, listRises, takeRise } = require("./src/stockWatch");
 const { listDrafts, getDraft, saveDraft, deleteDraft } = require("./src/orderDrafts");
 const { getTemplates, saveTemplate, getSenderNames, PLACEHOLDERS, LANGUAGES, LANG_CODES } = require("./src/mailTemplate");
 const { getAllLabels, createLabel, updateLabel, deleteLabel } = require("./src/inboundLabels");
@@ -38,8 +41,7 @@ app.use("/docs", express.static(path.join(__dirname, "docs")));
 // 네이버 API(상품/주문)는 호출당 시간이 꽤 걸리므로, 짧게 캐시해서
 // 라벨 저장/삭제처럼 화면을 다시 그릴 때마다 매번 다시 부르지 않게 합니다.
 const CACHE_TTL_MS = 3 * 60 * 1000;
-let productsCache = { data: null, expiresAt: 0 };
-const ordersCacheByDays = new Map(); // lookbackDays -> { data, expiresAt }
+const naverCache = new Map(); // "products" | "orders:<일수>" -> { data, fetchedAt }
 
 // 같은 요청이 이미 진행 중이면 새로 부르지 않고 그 결과를 같이 기다린다
 // (서버 시작 직후 미리 불러오는 중에 화면 요청이 들어와도 네이버를 두 번 부르지 않게)
@@ -55,40 +57,62 @@ function once(key, fn) {
 // (발주 완료로 처리 · 입고 처리 뒤 목록을 다시 그릴 때 네이버 조회 10초 넘게 기다리지 않게)
 const STALE_OK_MS = 30 * 60 * 1000;
 
+// 네이버 연결 상태. 마지막 호출이 실패했으면 첫 화면 '오늘 할 일'에 알린다
+// (매장 인터넷 주소가 바뀌거나 API 키가 만료되면 예전 데이터만 보고 있을 수 있어서)
+const naverStatus = { ok: true, message: "", failedAt: null, lastSuccessAt: null };
+
+function naverFailureMessage(err) {
+  const m = String(err?.message || "");
+  if (m.includes("IP_NOT_ALLOWED")) return "매장 인터넷 주소(IP)가 바뀌어서 네이버가 연결을 막았어요. 관리자에게 알려주세요.";
+  if (m.includes("인증 토큰") || m.includes("status=401") || m.includes("status=403") || m.includes(".env")) return "네이버 API 키에 문제가 있어 연결이 안 돼요. 관리자에게 알려주세요.";
+  if (m.includes("fetch failed") || m.includes("ENOTFOUND") || m.includes("ETIMEDOUT") || m.includes("ECONNRESET")) return "인터넷 연결을 확인해주세요. 연결되면 자동으로 다시 불러와요.";
+  return "네이버에서 데이터를 받지 못했어요. 계속되면 관리자에게 알려주세요.";
+}
+
+function trackNaver(fn) {
+  return async () => {
+    try {
+      const data = await fn();
+      Object.assign(naverStatus, { ok: true, message: "", failedAt: null, lastSuccessAt: new Date().toISOString() });
+      return data;
+    } catch (err) {
+      Object.assign(naverStatus, { ok: false, message: naverFailureMessage(err), failedAt: new Date().toISOString() });
+      throw err;
+    }
+  };
+}
+
 function refreshInBackground(key, fn) {
   once(key, fn).catch((err) => console.error("네이버 데이터 새로 받기 실패 (이전 데이터로 보여줘요):", err.message.split("\n")[0]));
 }
 
-async function getCachedProducts() {
-  const now = Date.now();
-  const load = async () => {
-    const data = await naverClient.fetchProducts();
-    productsCache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
+// force: 화면의 "새로고침" — 기다려서라도 새로 받는다. 실패하면 예전 데이터라도 보여준다 (화면이 통째로 멈추지 않게)
+async function getCached(key, fetchFn, force) {
+  const c = naverCache.get(key);
+  const age = c ? Date.now() - c.fetchedAt : Infinity;
+  const load = trackNaver(async () => {
+    const data = await fetchFn();
+    naverCache.set(key, { data, fetchedAt: Date.now() });
     return data;
-  };
-  if (productsCache.data && productsCache.expiresAt > now) return productsCache.data;
-  if (productsCache.data && productsCache.expiresAt - CACHE_TTL_MS + STALE_OK_MS > now) {
-    refreshInBackground("products", load);
-    return productsCache.data;
+  });
+  if (!force && age < CACHE_TTL_MS) return c.data;
+  if (!force && age < STALE_OK_MS) {
+    refreshInBackground(key, load);
+    return c.data;
   }
-  return once("products", load);
+  try {
+    return await once(key, load);
+  } catch (err) {
+    if (c) {
+      console.error("네이버 데이터 받기 실패 (이전 데이터로 보여줘요):", err.message.split("\n")[0]);
+      return c.data;
+    }
+    throw err;
+  }
 }
 
-async function getCachedOrders(days) {
-  const now = Date.now();
-  const cached = ordersCacheByDays.get(days);
-  const load = async () => {
-    const data = await naverClient.fetchRecentOrders(days);
-    ordersCacheByDays.set(days, { data, expiresAt: Date.now() + CACHE_TTL_MS });
-    return data;
-  };
-  if (cached && cached.expiresAt > now) return cached.data;
-  if (cached && cached.expiresAt - CACHE_TTL_MS + STALE_OK_MS > now) {
-    refreshInBackground(`orders:${days}`, load);
-    return cached.data;
-  }
-  return once(`orders:${days}`, load);
-}
+const getCachedProducts = (force) => getCached("products", () => naverClient.fetchProducts(), force);
+const getCachedOrders = (days, force) => getCached(`orders:${days}`, () => naverClient.fetchRecentOrders(days), force);
 
 // 서버가 켜지자마자 네이버 데이터를 미리 받아둔다. 바탕화면 아이콘이 화면을 여는 몇 초 사이에
 // 주문 조회(하루 단위로 여러 번 호출, 10초 안팎)가 거의 끝나 있어서 첫 화면이 빨리 뜬다.
@@ -110,14 +134,11 @@ function getSettings(query = {}) {
   const overrides = {
     lookbackDays: parseDays(query.lookbackDays, 1),
     bufferDays: parseDays(query.bufferDays, 0),
+    orderCycleDays: parseDays(query.orderCycleDays, 0),
   };
 
-  if (overrides.lookbackDays !== undefined || overrides.bufferDays !== undefined) {
-    saveSettings({
-      ...(overrides.lookbackDays !== undefined ? { lookbackDays: overrides.lookbackDays } : {}),
-      ...(overrides.bufferDays !== undefined ? { bufferDays: overrides.bufferDays } : {}),
-    });
-  }
+  const changed = Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined));
+  if (Object.keys(changed).length) saveSettings(changed);
   const saved = readSettings();
 
   // 예전 버전에서 빈 칸이 0으로 저장된 경우가 있어, 저장값도 검사해서 이상하면 기본값을 쓴다
@@ -125,19 +146,25 @@ function getSettings(query = {}) {
     lookbackDays: parseDays(saved.lookbackDays, 1) ?? Number(process.env.SALES_LOOKBACK_DAYS ?? 14),
     leadTimeDays: Number(process.env.DEFAULT_LEAD_TIME_DAYS ?? 7),
     bufferDays: parseDays(saved.bufferDays, 0) ?? Number(process.env.DEFAULT_SAFETY_BUFFER_DAYS ?? 3),
+    // 기본 발주 간격: 한 번 발주하면 며칠 뒤 다시 발주할지 (그 기간 동안 팔 양을 더 채운다). 업체마다 따로 정할 수 있다
+    orderCycleDays: parseDays(saved.orderCycleDays, 0) ?? DEFAULT_ORDER_CYCLE_DAYS,
   };
 }
+
+const DEFAULT_ORDER_CYCLE_DAYS = 14;
 
 // 이미 발주해서 들어올 수량을 재고에 더해 "발주 필요"와 권장 수량을 다시 계산한다.
 // 충분히 발주했으면 발주 필요에서 빠지고, 모자라면 남은 수량만 권장한다.
 function applyPendingOrder(p, pending) {
   if (!pending || pending.qty <= 0) return { ...p, pendingOrder: null };
   const covered = p.stockQuantity + pending.qty;
-  const needsReorder = p.dailyVelocity > 0 ? covered / p.dailyVelocity <= p.leadTimeDays : covered === 0;
+  const needsReorder = p.dailyVelocity > 0 ? covered / p.dailyVelocity <= p.reorderPointDays : covered === 0;
+  const neededQty = Math.max(0, p.targetStock - covered);
   return {
     ...p,
     needsReorder,
-    recommendedOrderQty: Math.max(0, p.recommendedOrderQty - pending.qty),
+    neededQty,
+    recommendedOrderQty: roundOrderQty(neededQty, p.orderRule),
     pendingOrder: pending,
   };
 }
@@ -161,43 +188,72 @@ function dailySalesByProduct(orders, days) {
 app.get("/api/products", async (req, res) => {
   try {
     // 화면의 "새로고침" 버튼은 캐시를 무시하고 네이버에서 새로 받아온다
-    if (req.query.fresh) {
-      productsCache = { data: null, expiresAt: 0 };
-      ordersCacheByDays.clear();
-    }
+    const force = !!req.query.fresh;
     const settings = getSettings(req.query);
-    const [products, orders, suppliers] = await Promise.all([
-      getCachedProducts(),
-      getCachedOrders(settings.lookbackDays),
-      Promise.resolve(getAllSuppliers()),
+    const [products, rawOrders] = await Promise.all([
+      getCachedProducts(force),
+      getCachedOrders(settings.lookbackDays, force),
     ]);
+    // 옵션 상품은 옵션마다 한 줄이라, 주문도 옵션 줄에 맞추고 예전에 상품에 지정한 업체 · 라벨을 옵션 줄이 이어받는다
+    const orders = assignOrdersToOptionRows(products, rawOrders);
+    migrateSuppliers((all) => inheritParentInfo(products, all));
+    const suppliers = getAllSuppliers();
     const labels = getAllLabels();
     const vendors = getAllVendors();
 
     const leadTimeOverrides = {};
+    const orderRules = {};
+    // 발주 간격: 업체에 직접 정한 값 → 발주 기록에서 알아낸 값(자동) → 기본값
+    const learnedCycles = orderIntervalsByVendor();
+    const cycleOverrides = {};
+    const cycleSource = {}; // "vendor" | "auto" (없으면 기본값)
     for (const [pid, info] of Object.entries(suppliers)) {
       const label = info.labelId ? labels[info.labelId] : null;
       const effective = info.leadTimeDays ?? label?.leadTimeDays;
       if (effective !== undefined && effective !== null) leadTimeOverrides[pid] = Number(effective);
+      if (info.minOrderQty || info.packSize) orderRules[pid] = { minOrderQty: info.minOrderQty, packSize: info.packSize };
+      const vendor = info.vendorId ? vendors[info.vendorId] : null;
+      if (vendor?.orderCycleDays !== undefined && vendor.orderCycleDays !== null) {
+        cycleOverrides[pid] = Number(vendor.orderCycleDays);
+        cycleSource[pid] = "vendor";
+      } else if (vendor && learnedCycles[info.vendorId]) {
+        cycleOverrides[pid] = learnedCycles[info.vendorId].days;
+        cycleSource[pid] = "auto";
+      }
     }
 
     // 발주 뒤 네이버 재고가 (팔린 만큼 빼고도) 늘어난 품목은 자동으로 입고 처리 (사람은 스마트스토어 재고만 올리면 됨)
-    const stockById = Object.fromEntries(products.map((p) => [p.id, p.stockQuantity]));
+    // 옵션으로 나누기 전에 상품 번호로 남긴 발주 기록도 알아볼 수 있게, 상품 번호에는 옵션 재고 합계를 넣는다
+    const stockById = {};
+    for (const p of products) if (p.parentId) stockById[p.parentId] = (stockById[p.parentId] || 0) + p.stockQuantity;
+    for (const p of products) stockById[p.id] = p.stockQuantity;
     const soldSince = (productId, sinceIso) => {
       const t = new Date(sinceIso).getTime();
-      return orders.reduce((sum, o) => (o.productId === productId && o.orderedAt && new Date(o.orderedAt).getTime() >= t ? sum + o.quantity : sum), 0);
+      return orders.reduce((sum, o) => ((o.productId === productId || o.parentId === productId) && o.orderedAt && new Date(o.orderedAt).getTime() >= t ? sum + o.quantity : sum), 0);
     };
-    autoReceiveArrived(stockById, soldSince);
+    const justReceived = autoReceiveArrived(stockById, soldSince);
     const pending = pendingByProduct();
+    // 발주 기록 없이 재고가 늘어난 품목 (= '발주 완료로 처리'를 깜빡한 발주가 도착) → 오늘 할 일에서 물어본다
+    const byHand = recentlyReceivedByHand();
+    detectUnrecordedArrivals(products, {
+      soldSince,
+      justReceived,
+      hasOpenOrder: (id) => {
+        const parentId = products.find((p) => p.id === id)?.parentId;
+        return !!pending[id] || !!pending[parentId] || byHand.has(id) || byHand.has(parentId);
+      },
+      maxAgeMs: settings.lookbackDays * 24 * 60 * 60 * 1000,
+    });
     const autoReceipts = recentAutoReceipts();
     const daily = dailySalesByProduct(orders, settings.lookbackDays);
-    const list = computeReorderList(products, orders, settings, leadTimeOverrides).map((p) => {
+    const list = computeReorderList(products, orders, settings, leadTimeOverrides, orderRules, cycleOverrides).map((p) => {
       const supplierInfo = suppliers[p.id] || null;
       const labelId = supplierInfo?.labelId && labels[supplierInfo.labelId] ? supplierInfo.labelId : null;
       const vendorId = supplierInfo?.vendorId && vendors[supplierInfo.vendorId] ? supplierInfo.vendorId : null;
       return {
         ...applyPendingOrder(p, pending[p.id]),
         recentAutoReceipt: autoReceipts[p.id] || null,
+        orderCycleSource: cycleSource[p.id] || "default",
         supplier: supplierInfo,
         labelId,
         label: labelId ? { id: labelId, ...labels[labelId] } : null,
@@ -211,25 +267,41 @@ app.get("/api/products", async (req, res) => {
     res.json({
       settings,
       mockMode: MOCK_MODE,
+      naver: { ...naverStatus },
       products: list,
       // 깜빡했을 때 재고 계산이 틀어질 수 있는 것들 → 첫 화면 '오늘 할 일'에 알림
       alerts: {
         drafts: listDrafts(),
-        stockNotRaised: receivedButStockNotRaised(stockById, soldSince),
+        unrecordedArrivals: listRises(),
       },
       labels: Object.entries(labels).map(([id, l]) => ({ id, ...l })),
-      vendors: Object.entries(vendors).map(([id, v]) => ({ id, ...v })),
+      vendors: Object.entries(vendors).map(([id, v]) => ({ id, ...v, learnedCycle: learnedCycles[id] || null })),
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    // 네이버 연결 문제면 매장에서 알아볼 수 있는 말로
+    res.status(500).json({ error: naverStatus.ok ? err.message : naverStatus.message });
   }
 });
 
-// 품목별 정보 저장 (거래 업체, 입고유형 라벨, 품목만의 리드타임)
+// 최소 주문 수량 · 묶음 단위: 빈 값이면 지우고(undefined), 아니면 1 이상 정수. 잘못된 값이면 null
+function parseOrderRule(value) {
+  if (String(value ?? "").trim() === "") return undefined;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 ? n : null;
+}
+
+// 품목별 정보 저장 (거래 업체, 입고유형 라벨, 품목만의 리드타임, 업체 주문 규칙)
 app.post("/api/suppliers/:productId", (req, res) => {
   try {
-    const { vendorId, leadTimeDays, labelId, vendorItemName } = req.body;
+    const { vendorId, leadTimeDays, labelId, vendorItemName, minOrderQty, packSize } = req.body;
+    const rules = {};
+    for (const [key, value] of Object.entries({ minOrderQty, packSize })) {
+      if (value === undefined) continue;
+      const n = parseOrderRule(value);
+      if (n === null) return res.status(400).json({ error: "최소 주문 수량과 묶음 단위는 1 이상의 정수로 입력해주세요." });
+      rules[key] = n;
+    }
     if (vendorId && !getAllVendors()[vendorId]) return res.status(400).json({ error: "업체를 찾을 수 없어요." });
     let leadTimeUpdate = {};
     if (leadTimeDays !== undefined) {
@@ -247,6 +319,7 @@ app.post("/api/suppliers/:productId", (req, res) => {
       // 해외 업체 발주서에 쓸 품명 (빈 값이면 지워서 원래 품명 사용)
       ...(vendorItemName !== undefined ? { vendorItemName: String(vendorItemName).trim() || undefined } : {}),
       ...leadTimeUpdate,
+      ...rules,
       ...(labelId !== undefined ? { labelId } : {}),
     });
     res.json(saved);
@@ -336,6 +409,15 @@ function readVendorInput(body, { partial }) {
     const lang = body.lang || "ko";
     if (!LANG_CODES.includes(lang)) throw new Error("발주서 언어를 다시 골라주세요.");
     out.lang = lang;
+  }
+  // 발주 간격 (빈 값이면 기본 발주 간격을 쓴다)
+  if (body.orderCycleDays !== undefined) {
+    if (String(body.orderCycleDays).trim() === "") out.orderCycleDays = partial ? null : undefined;
+    else {
+      const n = parseDays(body.orderCycleDays, 0);
+      if (n === undefined) throw new Error("발주 간격은 0 이상의 숫자로 입력해주세요.");
+      out.orderCycleDays = n;
+    }
   }
   return out;
 }
@@ -467,11 +549,32 @@ app.post("/api/orders/:id/unreceive", (req, res) => {
   res.json(saved);
 });
 
-// "입고했는데 네이버 재고가 그대로예요" 알림에서 "이미 올렸어요"
-app.post("/api/orders/:id/items/:productId/stock-checked", (req, res) => {
-  const saved = markStockChecked(req.params.id, req.params.productId);
-  if (!saved) return res.status(404).json({ error: "발주 기록을 찾을 수 없어요." });
-  res.json(saved);
+// "재고가 늘었는데 발주 기록이 없어요" 알림에서 "발주였어요" → 늦게라도 발주 기록(입고 완료)으로 남긴다.
+// 발주일은 알 수 없으니 재고가 늘어난 날에서 그 품목의 리드타임만큼 앞으로 잡는다 (발주 간격 계산용)
+app.post("/api/stock-rises/:id/confirm", (req, res) => {
+  const rise = takeRise(req.params.id);
+  if (!rise) return res.status(404).json({ error: "이미 처리한 알림이에요." });
+  const info = getAllSuppliers()[rise.productId] || {};
+  const vendor = info.vendorId ? getAllVendors()[info.vendorId] : null;
+  const label = info.labelId ? getAllLabels()[info.labelId] : null;
+  const lead = Number(info.leadTimeDays ?? label?.leadTimeDays ?? getSettings().leadTimeDays) || 0;
+  const orderedAt = new Date(new Date(rise.detectedAt).getTime() - lead * 24 * 60 * 60 * 1000).toISOString();
+  res.json(createOrder({
+    vendorId: vendor ? info.vendorId : "",
+    vendorName: vendor ? vendor.name : "업체 미지정",
+    createdAt: orderedAt,
+    lateRecord: true,
+    items: [{
+      productId: rise.productId, name: rise.name, qty: rise.qty, stockAtOrder: rise.before,
+      expectedAt: rise.detectedAt, receivedAt: rise.detectedAt, autoReceived: true, stockAtReceive: rise.after,
+    }],
+  }));
+});
+
+// "아니에요" (반품 재입고 · 재고 정리 등 발주가 아니었음)
+app.delete("/api/stock-rises/:id", (req, res) => {
+  takeRise(req.params.id);
+  res.json({ ok: true });
 });
 
 // 기록한 품목의 수량 고치기 / 품목 빼기
@@ -544,6 +647,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n재고 발주 도우미가 실행됐어요: http://localhost:${PORT}\n`);
   ensureDesktopShortcut();
+  startDailyBackup();
   warmUpCache();
 });
 

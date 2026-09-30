@@ -89,8 +89,29 @@ function statusOf(p) {
   }
   if (p.daysLeft === null) return { level: "none", text: "판매 없음" };
   if (p.needsReorder) return { level: "danger", text: `${formatDays(p.daysLeft)} 남음` };
-  if (p.daysLeft <= p.leadTimeDays + p.bufferDays) return { level: "warn", text: `${formatDays(p.daysLeft)} 남음` };
+  if (p.daysLeft <= reorderPointOf(p) + SOON_DAYS) return { level: "warn", text: `${formatDays(p.daysLeft)} 남음` };
   return { level: "ok", text: `${formatDays(p.daysLeft)} 남음` };
+}
+
+// 발주해야 하는 시점(리드타임 + 안전 여유)보다 이만큼 앞서 "곧 필요"로 알려준다
+const SOON_DAYS = 7;
+
+function reorderPointOf(p) {
+  return p.reorderPointDays ?? (p.leadTimeDays || 0) + (p.bufferDays || 0);
+}
+
+// 업체의 최소 주문 수량 · 묶음 단위에 맞춘 수량 (서버 src/reorderLogic.js 의 roundOrderQty 와 같은 규칙)
+function roundOrderQty(qty, rule = {}) {
+  if (!(qty > 0)) return 0;
+  const min = Number(rule?.minOrderQty) > 0 ? Number(rule.minOrderQty) : 0;
+  const pack = Number(rule?.packSize) > 1 ? Number(rule.packSize) : 1;
+  return Math.ceil(Math.max(qty, min) / pack) * pack;
+}
+
+// 품목 이름. 옵션 줄은 옵션(색상 등)을 앞에 칩으로 보여줘서, 긴 상품명이 잘려도 어떤 옵션인지 보이게
+function nameHtml(p) {
+  if (!p.optionName) return escapeHtml(p.name);
+  return `<span class="option-chip">${escapeHtml(p.optionName)}</span>${escapeHtml(p.productName || p.name)}`;
 }
 
 const LEVEL_ORDER = { danger: 0, warn: 1, ok: 2, none: 3 };
@@ -114,6 +135,11 @@ function shortDate(iso) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function timeText(iso) {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 function daysAgoText(iso) {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
   return days <= 0 ? "오늘" : `${days}일 전`;
@@ -134,8 +160,8 @@ function spikeInfo(p) {
   const max = Math.max(0, ...ds);
   if (total < 10 || max < 10 || max / total <= 0.5) return null;
   const velocity = (total - max) / ds.length;
-  const cover = (p.leadTimeDays || 0) + (p.bufferDays || 0);
-  const rec = Math.max(0, Math.ceil(velocity * cover) - p.stockQuantity - (p.pendingOrder?.qty || 0));
+  const cover = p.coverDays ?? reorderPointOf(p);
+  const rec = roundOrderQty(Math.ceil(velocity * cover) - p.stockQuantity - (p.pendingOrder?.qty || 0), p.orderRule);
   return { max, velocity: Number(velocity.toFixed(2)), rec };
 }
 
@@ -148,6 +174,14 @@ function spikeNoteHtml(p) {
   const sp = spikeInfo(p);
   if (!sp) return "";
   return `<div class="warn-box"><span>최근 ${p.dailySales.length}일 중 <b>하루에 ${sp.max}개</b> 주문이 몰렸어요. 이 날을 빼면 하루 ${sp.velocity}개 판매, 권장 발주 <b>${sp.rec}개</b>예요. 일회성 대량 주문이었다면 발주서에서 수량을 줄여주세요.</span></div>`;
+}
+
+// 최소 주문 수량 · 묶음 단위 때문에 권장 수량을 올렸으면 알려준다
+function orderRuleNoteHtml(p) {
+  const r = p.orderRule || {};
+  if (!(p.neededQty > 0) || p.recommendedOrderQty === p.neededQty) return "";
+  const why = [r.minOrderQty ? `최소 주문 ${r.minOrderQty}개` : "", r.packSize > 1 ? `${r.packSize}개 묶음` : ""].filter(Boolean).join(" · ");
+  return `<div class="info-box"><span>필요한 수량은 ${p.neededQty}개인데, ${why}에 맞춰 <b>${p.recommendedOrderQty}개</b>로 올렸어요.</span></div>`;
 }
 
 // "발주함 50개 · 10/5 예정" (예정일이 지나면 "입고 지연")
@@ -244,6 +278,9 @@ function buildTodayTasks(products) {
   const tasks = [];
   const alerts = currentData?.alerts || {};
 
+  // 네이버 연결이 끊겼으면 맨 위에 (예전 데이터로 계산하고 있다는 걸 알려야 해서)
+  if (currentData?.naver && currentData.naver.ok === false) tasks.push({ kind: "naver", naver: currentData.naver });
+
   // 발주 메일을 만들어 복사했는데 '발주 완료로 처리'를 안 한 업체 (깜빡하면 같은 품목을 또 발주할 수 있음)
   for (const d of alerts.drafts || []) tasks.push({ kind: "draft", draft: d });
 
@@ -273,8 +310,8 @@ function buildTodayTasks(products) {
   const late = products.filter((p) => p.pendingOrder && isLate(p.pendingOrder.expectedAt));
   if (late.length) tasks.push({ kind: "receive", items: late });
 
-  // 입고 처리했는데 스마트스토어 재고를 안 올린 품목 (올리지 않으면 발주 필요로 다시 뜸)
-  if (alerts.stockNotRaised?.length) tasks.push({ kind: "stock", items: alerts.stockNotRaised });
+  // 발주 기록 없이 네이버 재고가 늘어난 품목 ('발주 완료로 처리'를 깜빡한 발주가 도착한 것일 수 있음)
+  if (alerts.unrecordedArrivals?.length) tasks.push({ kind: "arrival", items: alerts.unrecordedArrivals });
 
   // 발주가 필요한데 업체가 없는 품목
   const noVendor = products.filter((p) => p.needsReorder && !p.vendorId);
@@ -289,7 +326,7 @@ function todayTaskHtml(t, i) {
     const lang = t.vendor?.lang && t.vendor.lang !== "ko" ? `<span class="lang-badge">${escapeHtml(langInfo(t.vendor.lang).label)}</span>` : "";
     const preview = t.items.slice(0, 2).map((p) => {
       const s = statusOf(p);
-      return `<div class="task-item"><span class="name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span><span class="task-item-status ${s.level}">${s.text}</span></div>`;
+      return `<div class="task-item"><span class="name" title="${escapeHtml(p.name)}">${nameHtml(p)}</span><span class="task-item-status ${s.level}">${s.text}</span></div>`;
     }).join("");
     const more = t.items.length > 2 ? `<div class="task-item more">외 ${t.items.length - 2}품목</div>` : "";
     return `
@@ -323,16 +360,41 @@ function todayTaskHtml(t, i) {
         </div>
       </div>`;
   }
-  if (t.kind === "stock") {
-    const first = t.items[0];
+  if (t.kind === "naver") {
+    const last = t.naver.lastSuccessAt ? `${daysAgoText(t.naver.lastSuccessAt) === "오늘" ? timeText(t.naver.lastSuccessAt) : daysAgoText(t.naver.lastSuccessAt)}에 받은 데이터로 보여주고 있어요. ` : "";
     return `
-      <div class="task-card task-small">
-        <span class="task-icon warn">${TASK_ICONS.receive}</span>
+      <div class="task-card task-small task-naver">
+        <span class="task-icon danger">${TASK_ICONS.link}</span>
         <div class="task-title">
-          <strong>스마트스토어 재고를 올렸나요? · ${t.items.length}품목</strong>
-          <span>입고 처리했는데 네이버 재고가 그대로예요 (${escapeHtml(first.name)}${t.items.length > 1 ? ` 외 ${t.items.length - 1}품목` : ""}). 재고를 올려야 발주 계산이 맞아요</span>
+          <strong>네이버 연결이 안 돼요</strong>
+          <span>${escapeHtml(last)}${escapeHtml(t.naver.message || "")}</span>
         </div>
-        <button class="btn-outline btn-sm" data-task-alt="${i}">이미 올렸어요</button>
+        <button class="btn-outline btn-sm" data-task="${i}">다시 연결</button>
+      </div>`;
+  }
+  if (t.kind === "arrival") {
+    const rows = t.items.map((r) => {
+      const p = productById(r.productId);
+      return `
+        <div class="arrival-row">
+          <span class="name" title="${escapeHtml(r.name)}">${p ? nameHtml(p) : escapeHtml(r.name)}</span>
+          <span class="arrival-qty">${r.before}개 → ${r.after}개 <span class="muted">(${shortDate(r.detectedAt)})</span></span>
+          <span class="arrival-buttons">
+            <button class="btn-ghost btn-sm" data-rise-no="${escapeHtml(r.id)}" title="반품 재입고 · 재고 정리처럼 발주가 아니었어요">아니에요</button>
+            <button class="btn-primary btn-sm" data-rise-yes="${escapeHtml(r.id)}" title="${r.qty}개 발주가 도착한 걸로 기록해요">발주였어요</button>
+          </span>
+        </div>`;
+    }).join("");
+    return `
+      <div class="task-card task-arrival">
+        <div class="task-head">
+          <span class="task-icon warn">${TASK_ICONS.receive}</span>
+          <div class="task-title">
+            <strong>재고가 늘었는데 발주 기록이 없어요 · ${t.items.length}품목</strong>
+            <span>'발주 완료로 처리'를 깜빡한 발주가 도착했나요? '발주였어요'를 누르면 늘어난 수량으로 발주 기록을 남겨요 (다음 발주 계산에 쓰여요)</span>
+          </div>
+        </div>
+        <div class="arrival-list">${rows}</div>
       </div>`;
   }
   if (t.kind === "receive") {
@@ -376,18 +438,20 @@ function renderTodayTasks() {
       if (t.kind === "order") openOrder({ vendorId: t.vendor.id });
       else if (t.kind === "draft") taskAction(btn, () => postJson(`/api/order-drafts/${encodeURIComponent(t.draft.vendorId)}/record`, "POST", {}), "발주 완료로 처리했어요");
       else if (t.kind === "receive") openOrders();
+      else if (t.kind === "naver") { btn.disabled = true; loadProducts({ fresh: 1 }); }
       else openVendorManager("assign");
     });
   });
+  box.querySelectorAll("[data-rise-yes]").forEach((btn) => btn.addEventListener("click", () =>
+    taskAction(btn, () => postJson(`/api/stock-rises/${encodeURIComponent(btn.dataset.riseYes)}/confirm`, "POST", {}), "발주 기록에 남겼어요")));
+  box.querySelectorAll("[data-rise-no]").forEach((btn) => btn.addEventListener("click", () =>
+    taskAction(btn, () => fetchJson(`/api/stock-rises/${encodeURIComponent(btn.dataset.riseNo)}`, { method: "DELETE" }), "알림을 지웠어요")));
   box.querySelectorAll("[data-task-alt]").forEach((btn) => {
     const t = tasks[Number(btn.dataset.taskAlt)];
     btn.addEventListener("click", () => {
       if (t.kind === "draft") {
         confirmClick(btn, "한 번 더 누르면 지우기", () =>
           taskAction(btn, () => fetchJson(`/api/order-drafts/${encodeURIComponent(t.draft.vendorId)}`, { method: "DELETE" }), "알림을 지웠어요"));
-      } else if (t.kind === "stock") {
-        taskAction(btn, () => Promise.all(t.items.map((it) =>
-          postJson(`/api/orders/${encodeURIComponent(it.orderId)}/items/${encodeURIComponent(it.productId)}/stock-checked`, "POST", {}))), "확인했어요");
       }
     });
   });
@@ -436,7 +500,7 @@ function render() {
 
   const now = new Date();
   $("criteriaText").textContent =
-    `최근 ${data.settings.lookbackDays}일 판매 기준 · 안전 여유 ${data.settings.bufferDays}일 · ` +
+    `최근 ${data.settings.lookbackDays}일 판매 기준 · 안전 여유 ${data.settings.bufferDays}일 · 기본 발주 간격 ${data.settings.orderCycleDays ?? 0}일 · ` +
     `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")} 기준`;
 
   renderTodayTasks();
@@ -554,7 +618,7 @@ function renderQuickRecord() {
         ${rows.map(({ it, p }) => `
           <div class="qr-row" data-qr-id="${escapeHtml(p.id)}">
             <span class="qr-name">
-              <span class="name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+              <span class="name" title="${escapeHtml(p.name)}">${nameHtml(p)}</span>
               ${p.pendingOrder ? `<span class="pending-note">이미 발주함 · ${daysAgoText(p.pendingOrder.orderedAt)} ${p.pendingOrder.qty}개</span>` : ""}
             </span>
             <span class="num"><input class="input qr-qty" type="number" min="1" value="${it.qty}" aria-label="발주 수량" />개</span>
@@ -641,7 +705,7 @@ function sparklineSvg(values) {
 function stockBarPercent(p) {
   if (p.stockQuantity <= 0) return 0;
   if (p.daysLeft === null) return 100;
-  const target = (p.leadTimeDays || 0) + (p.bufferDays || 0) || 1;
+  const target = reorderPointOf(p) || 1;
   return Math.max(3, Math.min(100, Math.round((p.daysLeft / (target * 2)) * 100)));
 }
 
@@ -666,7 +730,7 @@ function cardHtml(p) {
         <span class="status ${s.level} card-status">${s.text}</span>
       </div>
       <div class="card-body">
-        <div class="card-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
+        <div class="card-name" title="${escapeHtml(p.name)}">${nameHtml(p)}</div>
         <div class="product-sub">${p.label ? labelChip(p.label) : ""}${pendingChip(p)}${spikeChip(p)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
         <div class="card-stock">
           <div class="card-stock-text"><span>재고 ${p.stockQuantity}개</span><span>하루 ${p.dailyVelocity}개</span></div>
@@ -712,7 +776,7 @@ function rowHtml(p) {
     <div class="product-row ${picked.has(p.id) ? "picked" : ""}" data-id="${escapeHtml(p.id)}" role="button" tabindex="0">
       <label class="pick" title="선택"><input type="checkbox" class="pick-check" ${picked.has(p.id) ? "checked" : ""} aria-label="선택" /></label>
       <div>
-        <div class="product-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
+        <div class="product-name" title="${escapeHtml(p.name)}">${nameHtml(p)}</div>
         <div class="product-sub">${p.label ? labelChip(p.label) : ""}${pendingChip(p)}${spikeChip(p)}${p.vendor ? `<span class="vendor-chip">${escapeHtml(p.vendor.name)}</span>` : ""}</div>
       </div>
       <div class="num"><span class="cell-label">재고</span>${p.stockQuantity}개</div>
@@ -760,7 +824,7 @@ function openDetail(productId) {
   const labelLeadTime = p.label ? p.label.leadTimeDays : null;
   $("detailBody").innerHTML = `
     <div class="detail-head">
-      <h3>${escapeHtml(p.name)}</h3>
+      <h3>${nameHtml(p)}</h3>
       <div class="detail-meta">
         <span class="status ${s.level}">${s.text}</span>
         ${labelChip(p.label)}
@@ -775,7 +839,7 @@ function openDetail(productId) {
       <div class="stat-box"><div class="label">리드타임</div><div class="value">${p.leadTimeDays}일</div></div>
       <div class="stat-box highlight"><div class="label">권장 발주</div><div class="value">${p.recommendedOrderQty > 0 || !p.needsReorder ? `${p.recommendedOrderQty}개` : "직접"}</div></div>
     </div>
-    ${spikeNoteHtml(p)}${p.needsReorder && p.recommendedOrderQty <= 0 ? `<div class="warn-box"><span>품절인데 최근 판매 기록이 없어서 권장 수량을 계산할 수 없어요. 발주서에서 수량을 직접 정해주세요.</span></div>` : ""}
+    ${orderRuleNoteHtml(p)}${spikeNoteHtml(p)}${p.needsReorder && p.recommendedOrderQty <= 0 ? `<div class="warn-box"><span>품절인데 최근 판매 기록이 없어서 권장 수량을 계산할 수 없어요. 발주서에서 수량을 직접 정해주세요.</span></div>` : ""}
 
     <h4>거래 업체 · 입고유형</h4>
     <div class="form-grid">
@@ -787,6 +851,7 @@ function openDetail(productId) {
           </select>
           <button type="button" class="btn-ghost btn-sm" id="detailOpenVendors">업체 관리</button>
         </div>
+        <small>${cycleNoteText(p)}</small>
       </label>
       <label class="field">입고유형 라벨
         <select id="detailLabel" class="input" style="width:100%;">
@@ -802,6 +867,14 @@ function openDetail(productId) {
         <input id="vendorItemName" class="input" value="${escapeHtml(supplier.vendorItemName || "")}" placeholder="예: Sun catcher acrylic plate M / 亚克力板 M / 모델번호 SP05" />
         <small>업체가 알아보는 이름이나 모델번호를 적으면 발주서에 이 이름이 들어가요. 해외 업체에 영어·중국어 이름으로 보낼 때 쓰세요. 비워두면 원래 품명을 써요.</small>
       </label>
+      <label class="field">최소 주문 수량 (선택)
+        <div class="input-suffix"><input id="minOrderQty" class="input" type="number" min="1" value="${supplier.minOrderQty ?? ""}" placeholder="없음" /><span>개</span></div>
+        <small>업체가 이보다 적게는 안 팔면 적어주세요</small>
+      </label>
+      <label class="field">묶음 단위 (선택)
+        <div class="input-suffix"><input id="packSize" class="input" type="number" min="1" value="${supplier.packSize ?? ""}" placeholder="낱개" /><span>개씩</span></div>
+        <small>예: 10개 단위로만 팔면 10. 권장 수량을 이 단위로 올려요</small>
+      </label>
     </div>
 
     <div class="detail-footer">
@@ -811,11 +884,12 @@ function openDetail(productId) {
     </div>
   `;
 
-  for (const id of ["detailVendor", "detailLabel", "productLeadTime", "vendorItemName"]) {
+  for (const id of ["detailVendor", "detailLabel", "productLeadTime", "vendorItemName", "minOrderQty", "packSize"]) {
     $(id).addEventListener("change", () => saveSupplier(p.id));
   }
-  $("productLeadTime").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
-  $("vendorItemName").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+  for (const id of ["productLeadTime", "vendorItemName", "minOrderQty", "packSize"]) {
+    $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+  }
   $("detailOpenVendors").addEventListener("click", () => { closeModal("detailOverlay"); openVendorManager("list"); });
   $("recordFromDetail").addEventListener("click", () => {
     closeModal("detailOverlay");
@@ -835,6 +909,8 @@ async function saveSupplier(productId) {
     vendorItemName: $("vendorItemName").value,
     leadTimeDays: $("productLeadTime").value,
     labelId: $("detailLabel").value,
+    minOrderQty: $("minOrderQty").value,
+    packSize: $("packSize").value,
   };
   $("detailSaveState").textContent = "저장 중…";
   try {
@@ -1054,7 +1130,7 @@ function orderRowHtml(p, item) {
     <div class="order-row ${item.checked ? "checked" : ""}" data-order-id="${escapeHtml(p.id)}">
       <input type="checkbox" class="order-check" ${item.checked ? "checked" : ""} />
       <span class="order-name">
-        <span class="name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+        <span class="name" title="${escapeHtml(p.name)}">${nameHtml(p)}</span>
         ${p.supplier?.vendorItemName ? `<span class="vendor-item-name">업체용 품명: ${escapeHtml(p.supplier.vendorItemName)}</span>` : ""}
         ${spikeInfo(p) ? `<span class="spike-note">하루 ${spikeInfo(p).max}개 대량 주문 포함 · 제외하면 권장 ${spikeInfo(p).rec}개</span>` : ""}
         ${p.pendingOrder ? `<span class="pending-note">이미 발주함 · ${daysAgoText(p.pendingOrder.orderedAt)} ${p.pendingOrder.qty}개 (${shortDate(p.pendingOrder.expectedAt)} 입고 예정)</span>` : ""}
@@ -1084,7 +1160,7 @@ function renderOrderAddResults() {
   const inList = new Set(orderRowIds());
   const matches = currentData.products.filter((p) => !inList.has(p.id) && p.name.toLowerCase().includes(q)).slice(0, 6);
   box.innerHTML = matches.length
-    ? matches.map((p) => `<button type="button" class="order-add-item" data-add-id="${escapeHtml(p.id)}"><span class="name">${escapeHtml(p.name)}</span><span class="muted">${p.vendor ? escapeHtml(p.vendor.name) : "업체 미지정"}</span></button>`).join("")
+    ? matches.map((p) => `<button type="button" class="order-add-item" data-add-id="${escapeHtml(p.id)}"><span class="name">${nameHtml(p)}</span><span class="muted">${p.vendor ? escapeHtml(p.vendor.name) : "업체 미지정"}</span></button>`).join("")
     : `<div class="muted order-add-empty">추가할 수 있는 품목이 없어요</div>`;
 }
 
@@ -1325,7 +1401,7 @@ function assignPaneHtml(cfg) {
         ? visible.map((p) => `
           <div class="unlabeled-row assign-row ${state.selected.has(p.id) ? "checked" : ""}" data-product-id="${escapeHtml(p.id)}">
             <input type="checkbox" ${state.selected.has(p.id) ? "checked" : ""} aria-label="선택" />
-            <span class="name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+            <span class="name" title="${escapeHtml(p.name)}">${nameHtml(p)}</span>
             ${state.filter === "all" ? `<span class="assign-current">${cfg.chip(p)}</span>` : ""}
           </div>`).join("")
         : `<div class="empty-note">${query ? "검색 결과가 없어요" : state.filter === "none" ? `모든 품목에 ${cfg.subj} 지정돼 있어요. '전체 품목'으로 바꾸면 이미 지정된 품목도 바꿀 수 있어요.` : "품목이 없어요"}</div>`}
@@ -1556,6 +1632,7 @@ function renderVendorManagerBody() {
       <input id="newVendorName" class="input" type="text" placeholder="새 업체 이름 (예: 글라스월드)" />
       <input id="newVendorEmail" class="input" type="email" placeholder="이메일 (예: order@glass.co.kr)" />
       ${langSelectHtml("input", "ko", "newVendorLang")}
+      ${cycleInputHtml("", "newVendorCycle")}
       <span></span>
       <div class="label-row-actions"><button class="btn-primary btn-sm" id="createVendorBtn">업체 추가</button></div>
     </div>
@@ -1566,6 +1643,7 @@ function renderVendorManagerBody() {
           <input class="input vendor-edit-name" data-field="name" type="text" value="${escapeHtml(v.name)}" aria-label="업체 이름" />
           <input class="input vendor-edit-email" data-field="email" type="email" value="${escapeHtml(v.email || "")}" placeholder="이메일" aria-label="이메일" />
           ${langSelectHtml("input vendor-edit-lang", v.lang || "ko", null, "lang")}
+          ${cycleInputHtml(v.orderCycleDays ?? "", null, v.learnedCycle)}
           <span class="muted small nowrap">품목 ${countByVendor.get(v.id) || 0}개</span>
           <div class="label-row-actions">
             <button class="btn-primary btn-sm row-save-btn update-vendor-btn" style="visibility:hidden" disabled>변경 저장</button>
@@ -1579,7 +1657,8 @@ function renderVendorManagerBody() {
   const unsaved = captureDirtyRows("vendorManagerBody");
   $("vendorManagerBody").innerHTML = `
     <h3>거래 업체</h3>
-    <p class="modal-desc">발주를 보내는 업체와 이메일을 등록하고, 품목을 업체에 연결해요. 발주서를 만들 때 업체를 고르면 연결된 품목이 나와요.</p>
+    <p class="modal-desc">발주를 보내는 업체와 이메일을 등록하고, 품목을 업체에 연결해요. 발주서를 만들 때 업체를 고르면 연결된 품목이 나와요.
+      <b>발주 간격</b>은 '발주 완료로 처리'한 기록을 보고 자동으로 계산해요(업체마다 발주 3번부터). 계산이 이상할 때만 직접 적어주세요.</p>
     ${managerTabsHtml(s, "업체 목록", currentVendors.length, "품목 연결", unassigned.length)}
     <div class="manager-pane" data-view="${s.tab}|${s.filter}">${s.tab === "list" ? listPane : assignPaneHtml(cfg)}</div>
   `;
@@ -1600,8 +1679,9 @@ function renderVendorManagerBody() {
     const name = row.querySelector(".vendor-edit-name").value.trim();
     const email = row.querySelector(".vendor-edit-email").value.trim();
     const lang = row.querySelector(".vendor-edit-lang").value;
+    const orderCycleDays = row.querySelector(".vendor-edit-cycle").value;
     try {
-      await postJson(`/api/vendors/${row.dataset.vendorId}`, "PUT", { name, email, lang });
+      await postJson(`/api/vendors/${row.dataset.vendorId}`, "PUT", { name, email, lang, orderCycleDays });
     } catch (err) {
       toast(err.message || "업체 저장에 실패했어요.", "error");
       return;
@@ -1628,16 +1708,35 @@ function renderVendorManagerBody() {
   });
 }
 
+// 업체별 발주 간격 칸. 비워두면 발주 기록에서 알아낸 간격(자동), 기록이 적으면 기본값. 자동이 틀릴 때만 적는다
+function cycleInputHtml(value, id, learned) {
+  const def = currentData?.settings?.orderCycleDays ?? 14;
+  const hint = learned ? `자동 ${learned.days}` : String(def);
+  const title = learned ? `최근 발주 ${learned.orders}번을 보면 약 ${learned.days}일마다 발주했어요. 비워두면 이 값을 써요` : `발주 기록이 3번 쌓이면 자동으로 계산해요. 그 전에는 기본 ${def}일`;
+  return `<div class="input-suffix cycle-input" title="${escapeHtml(title)}">
+    <input class="input vendor-edit-cycle" ${id ? `id="${id}"` : 'data-field="orderCycleDays"'} type="number" min="0" value="${escapeHtml(String(value))}" placeholder="${hint}" aria-label="발주 간격" /><span>일마다</span>
+  </div>`;
+}
+
+// 품목 상세: 어떤 발주 간격으로 계산했는지
+function cycleNoteText(p) {
+  const d = p.orderCycleDays ?? 0;
+  if (p.orderCycleSource === "vendor") return `발주 간격 ${d}일 (업체 관리에서 직접 정한 값)`;
+  if (p.orderCycleSource === "auto") return `발주 간격 약 ${d}일 (이 업체 발주 기록에서 자동으로 계산)`;
+  return `발주 간격 ${d}일 (기본값 · 이 업체에 발주 기록이 3번 쌓이면 자동으로 맞춰요)`;
+}
+
 async function createVendorFromForm() {
   const name = $("newVendorName").value.trim();
   const email = $("newVendorEmail").value.trim();
   const lang = $("newVendorLang").value;
+  const orderCycleDays = $("newVendorCycle").value;
   if (!name) {
     toast("업체 이름을 입력해주세요.", "error");
     return;
   }
   try {
-    await postJson("/api/vendors", "POST", { name, email, lang });
+    await postJson("/api/vendors", "POST", { name, email, lang, orderCycleDays });
   } catch (err) {
     toast(err.message || "업체 추가에 실패했어요.", "error");
     return;
@@ -1672,6 +1771,19 @@ function isOpenOrder(o) {
   return o.items.some((i) => !i.receivedAt);
 }
 
+// 지금 스토어에서 파는 품목인지 (옵션으로 나누기 전 상품번호로 기록한 것도 포함). 품목을 못 불러왔으면 있다고 본다.
+// 스토어에서 지우거나 판매중지한 품목의 발주는 자동 입고가 안 되므로 '빼기'로 정리하게 알려준다
+function inStore(productId) {
+  const products = currentData?.products;
+  if (!products) return true;
+  return products.some((p) => p.id === productId || p.parentId === productId);
+}
+
+// 입고 대기 숫자: 스토어에 없는 품목만 남은 발주는 세지 않는다
+function waitingOrderCount(orders) {
+  return orders.filter((o) => o.items.some((i) => !i.receivedAt && inStore(i.productId))).length;
+}
+
 function renderOrders() {
   const s = ordersState;
   const all = s.orders;
@@ -1686,7 +1798,7 @@ function renderOrders() {
     return `
       <div class="order-card ${done ? "done" : ""}" data-order-id="${escapeHtml(o.id)}">
         <div class="order-card-head">
-          <strong>${escapeHtml(vendorById(o.vendorId)?.name || o.vendorName || "업체 미지정")}</strong>${o.direct ? `<span class="direct-badge" title="발주서 없이 첫 화면에서 기록">직접 기록</span>` : ""}
+          <strong>${escapeHtml(vendorById(o.vendorId)?.name || o.vendorName || "업체 미지정")}</strong>${o.direct ? `<span class="direct-badge" title="발주서 없이 첫 화면에서 기록">직접 기록</span>` : ""}${o.lateRecord ? `<span class="direct-badge" title="재고가 늘어난 걸 보고 나중에 기록했어요. 발주일은 리드타임으로 짐작한 날짜예요">나중에 기록</span>` : ""}
           <span class="muted small">${shortDate(o.createdAt)} 발주 · ${daysAgoText(o.createdAt)} · ${o.items.length}개 품목</span>
           <span class="status ${done ? "ok" : received ? "warn" : "none"}">${done ? "입고 완료" : `입고 ${received}/${o.items.length}`}</span>
           <span class="spacer"></span>
@@ -1695,13 +1807,14 @@ function renderOrders() {
         </div>
         <div class="order-card-items">
           ${o.items.map((i) => {
-            const late = !i.receivedAt && isLate(i.expectedAt);
+            const gone = !i.receivedAt && !inStore(i.productId);
+            const late = !i.receivedAt && !gone && isLate(i.expectedAt);
             return `
             <div class="order-item" data-product-id="${escapeHtml(i.productId)}">
               <span class="name">${escapeHtml(i.name)}${i.vendorItemName ? `<small>업체용: ${escapeHtml(i.vendorItemName)}</small>` : ""}${i.autoReceived ? `<small class="arrived-note">스마트스토어 재고가 늘어서 자동 입고 (${i.stockAtOrder}개 → ${i.stockAtReceive}개)</small>` : ""}</span>
               <span class="num">${i.receivedAt ? `${i.qty}개` : `<input class="input order-item-qty" type="number" min="1" value="${i.qty}" aria-label="발주 수량" />개`}</span>
-              <span class="order-item-state ${i.receivedAt ? "received" : late ? "late" : ""}">${i.receivedAt ? `입고 ${shortDate(i.receivedAt)}` : late ? `입고 지연 (${shortDate(i.expectedAt)} 예정)` : `${shortDate(i.expectedAt)} 입고 예정`}</span>
-              <span class="order-item-actions">${i.receivedAt ? `<button class="btn-ghost btn-sm" data-unreceive>되돌리기</button>` : `<button class="btn-outline btn-sm" data-receive>입고</button><button class="btn-danger-ghost btn-sm" data-remove-item>빼기</button>`}</span>
+              <span class="order-item-state ${i.receivedAt ? "received" : late || gone ? "late" : ""}" ${gone ? 'title="스토어에서 지웠거나 판매중지한 품목이라 자동 입고가 안 돼요. 더 안 받을 거면 빼기를 누르세요"' : ""}>${i.receivedAt ? `입고 ${shortDate(i.receivedAt)}` : gone ? "스토어에 없는 품목" : late ? `입고 지연 (${shortDate(i.expectedAt)} 예정)` : `${shortDate(i.expectedAt)} 입고 예정`}</span>
+              <span class="order-item-actions">${i.receivedAt ? `<button class="btn-ghost btn-sm" data-unreceive>되돌리기</button>` : gone ? `<button class="btn-danger-ghost btn-sm" data-remove-item>빼기</button>` : `<button class="btn-outline btn-sm" data-receive>입고</button><button class="btn-danger-ghost btn-sm" data-remove-item>빼기</button>`}</span>
             </div>`;
           }).join("")}
         </div>
@@ -1714,7 +1827,7 @@ function renderOrders() {
     <p class="modal-desc">발주서나 첫 화면에서 '발주 완료로 처리'한 내용이에요. 물건이 들어와 <b>스마트스토어 재고를 올리면 자동으로 입고 처리</b>돼요. 수량이 틀렸으면 그 칸을 고치고, 잘못 넣은 품목은 <b>빼기</b>를 누르세요.</p>
     <div class="orders-toolbar">
       <div class="tabs manager-tabs" role="tablist">
-        <button type="button" class="tab ${s.tab === "pending" ? "active" : ""}" data-orders-tab="pending">입고 대기 ${open.length ? `<span class="dot-badge">${open.length}</span>` : ""}</button>
+        <button type="button" class="tab ${s.tab === "pending" ? "active" : ""}" data-orders-tab="pending">입고 대기 ${waitingOrderCount(open) ? `<span class="dot-badge">${waitingOrderCount(open)}</span>` : ""}</button>
         <button type="button" class="tab ${s.tab === "all" ? "active" : ""}" data-orders-tab="all">전체 기록 <span class="tab-count">${all.length}</span></button>
       </div>
       ${vendorIds.length > 1 ? `
@@ -1778,6 +1891,7 @@ function openSettings() {
   if (currentData) {
     $("lookbackDays").value = currentData.settings.lookbackDays;
     $("bufferDays").value = currentData.settings.bufferDays;
+    $("orderCycleDays").value = currentData.settings.orderCycleDays ?? "";
   }
   openModal("settingsOverlay");
 }
@@ -1785,15 +1899,16 @@ function openSettings() {
 async function applySettings() {
   const lookbackDays = $("lookbackDays").value;
   const bufferDays = $("bufferDays").value;
-  if (!(Number(lookbackDays) >= 1) || bufferDays === "" || Number(bufferDays) < 0) {
-    toast("판매 속도 계산 기간은 1일 이상, 안전 여유일수는 0일 이상으로 입력해주세요.", "error");
+  const orderCycleDays = $("orderCycleDays").value;
+  if (!(Number(lookbackDays) >= 1) || bufferDays === "" || Number(bufferDays) < 0 || orderCycleDays === "" || Number(orderCycleDays) < 0) {
+    toast("판매 속도 계산 기간은 1일 이상, 안전 여유일수와 발주 간격은 0일 이상으로 입력해주세요.", "error");
     return;
   }
   const btn = $("applySettings");
   btn.disabled = true;
   btn.textContent = "적용 중…";
   try {
-    const ok = await loadProducts({ lookbackDays, bufferDays });
+    const ok = await loadProducts({ lookbackDays, bufferDays, orderCycleDays });
     if (ok) {
       closeModal("settingsOverlay");
       toast("판단 기준을 적용했어요");

@@ -16,14 +16,17 @@
 | 경로 | 내용 |
 |---|---|
 | `server.js` | Express 서버. `/api/products`(네이버 상품+주문 → 발주 계산, 3분 캐시, `?fresh=1` 로 캐시 무시), `/api/suppliers/:id`(품목의 vendorId·labelId·리드타임), `/api/labels`·`/api/vendors`(+`/assign` 일괄 지정), `/api/mail-template`, `/api/whats-new`(+`/seen`), `/docs` 정적 제공 |
-| `src/orders.js` | 발주 기록(`data/orders.json`). 입고 안 된 수량은 `/api/products` 에서 들어올 재고로 더해 발주 필요·권장 수량을 다시 계산(`applyPendingOrder`). 발주할 때 네이버 재고(`stockAtOrder`)를 남겨 두고, 팔린 수량을 빼고도 재고가 발주 수량의 절반 이상 늘면 **자동 입고**(`autoReceiveArrived`, 되돌리면 `noAuto`). 사람이 입고를 눌렀는데 재고가 안 늘면 알림(`receivedButStockNotRaised`) |
+| `src/orders.js` | 발주 기록(`data/orders.json`). 입고 안 된 수량은 `/api/products` 에서 들어올 재고로 더해 발주 필요·권장 수량을 다시 계산(`applyPendingOrder`). 발주할 때 네이버 재고(`stockAtOrder`)를 남겨 두고, 팔린 수량을 빼고도 재고가 발주 수량의 절반 이상 늘면 **자동 입고**(`autoReceiveArrived`, 되돌리면 `noAuto`). 업체별 실제 발주 간격(`orderIntervalsByVendor`). 스토어에서 사라진 품목의 발주는 화면에 "스토어에 없는 품목"으로 표시 |
 | `src/orderDrafts.js` | 메일을 복사했는데 '발주 완료로 처리'를 안 한 발주서(`data/order-drafts.json`, 업체별). 첫 화면 '오늘 할 일'에 알림, 처리하면 지워짐 |
 | `src/vendors.js` | 거래 업체(이름·이메일). 서버 시작 시 예전 품목별 업체명/이메일을 업체 목록으로 옮김 |
 | 발주 흐름 | 화면의 "발주서 만들기": 업체 선택 → 그 업체 품목(발주 필요는 미리 체크)·수량 수정 → 메일 한 통 분량 생성 → 받는 사람·제목·본문 각각 복사해 **네이버 웹메일**에 붙여넣기 (매장은 웹메일 사용, 앱이 직접 발송하지 않음). 메일 양식은 `{{품목목록}}` 필수 |
 | 해외 업체 | 업체마다 발주서 언어(`lang`: ko/en/zh). 메일 양식은 언어별(`src/mailTemplate.js` 의 `DEFAULT_TEMPLATES`, 자리표시자는 언어 상관없이 한글 키). 품목별 `vendorItemName`(업체용 품명)이 있으면 발주서에 그 이름 사용 — 자동 번역은 하지 않음. 보내는 사람: `SENDER_NAME`(ko) / `SENDER_NAME_EN`(en·zh) |
-| `src/naverClient.js` | 네이버 커머스API (주문 조회는 24시간 단위로 나눠 호출) |
+| `src/naverClient.js` | 네이버 커머스API. 판매중(SALE)·품절(OUTOFSTOCK) 상품만. **옵션 상품은 옵션마다 한 줄**(id `상품번호_옵션번호`, `parentId`) — 옵션 재고는 원상품 상세(`/v2/products/origin-products/{no}`)에만 있어 `data/naver-options.json` 에 캐시하고 바뀐 상품만 다시 조회(처음엔 최대 8초만 기다리고 나머지는 뒤에서). 주문은 하루 단위로만 조회돼서 날짜별로 `data/naver-orders.json` 에 캐시, 최근 7일만 매번 다시 받음. 네이버 호출 제한은 초당 3회 정도(429 는 `authedFetch` 가 쉬었다 재시도) |
+| `src/productOptions.js` | 주문의 `productOption`("색상: 021 Yellow")을 옵션 줄에 맞춤, 옵션 줄이 상품(또는 같은 상품 다른 옵션)의 업체·라벨을 이어받음 |
+| `src/stockWatch.js` | 발주 기록 없이 네이버 재고가 늘어난 품목 감지(`data/stock-watch.json`) → 오늘 할 일 "재고가 늘었는데 발주 기록이 없어요" → '발주였어요'면 늦게 기록(`lateRecord`, 발주일 = 감지일 − 리드타임) |
+| `src/backup.js` | `data/*.json` 을 하루 한 번 `data/backups/날짜/` 로 복사, 14일치 보관 |
 | `src/mockData.js` | `MOCK_MODE=true` 일 때 샘플 데이터 |
-| `src/reorderLogic.js` | 판매 속도·남은 일수·권장 수량 계산 |
+| `src/reorderLogic.js` | 판매 속도·남은 일수·권장 수량 계산. 발주 필요 = 남은 일수 ≤ 리드타임 + 안전 여유. 권장 = 하루 판매 × (리드타임 + 여유 + 발주 간격) − 재고 → 최소 주문 수량·묶음 단위(품목별 `minOrderQty`·`packSize`)로 올림. 발주 간격은 업체에 직접 정한 값 → 발주 기록에서 자동(`orderIntervalsByVendor`, 발주 3번부터 중간값) → 기본값(판단 기준, 14일) |
 | `src/changelog.js` | 앱 안 "업데이트 내용" 기록 (최신이 맨 위) |
 | `src/suppliers.js`, `inboundLabels.js`, `settings.js`, `mailTemplate.js`, `uiState.js` | `data/*.json` 읽기/쓰기 |
 | `public/` | 화면 (index.html / style.css / app.js, 빌드 없음) |
@@ -73,6 +76,12 @@
   - 상품 사진: `channelProducts[0].representativeImage.url` (원본이 수 MB 라 목록에서는 `?type=m510` 을 붙여 작게 받는다)
   - 주문: `data.contents[].content.{order, productOrder, delivery}` — 예전엔 이 경로를 잘못 읽어 판매량이 전부 0 이었다 (9/29 수정)
 - 하루에 주문이 몰린 품목은 "대량 주문 포함" 표시(`spikeInfo`), 품절인데 판매 기록이 없으면 권장 수량 대신 "직접 정하기".
+
+## 매장 운영 전제 (관리자 확인, 2026-09-30)
+
+- 사모님은 물건이 오면 **스마트스토어 재고는 반드시 올린다** (안 올리면 못 팔기 때문). 깜빡하는 건 우리 프로그램의 조작(특히 '발주 완료로 처리')뿐이라고 가정하고 설계한다. 그래서 '재고 올렸나요?' 알림은 없앴고, 기록 없는 재고 증가를 감지한다.
+- 발주 간격 같은 값을 사람이 입력·관리하게 하지 않는다 (업체마다 주기가 들쭉날쭉). 기록에서 알아내고, 사람은 틀릴 때만 고친다.
+- 더 안 팔 상품은 판매중지로 두면 목록에서 빠진다. 계속 발주할 상품은 품절로 둔다.
 
 ## 현재 상태 / 남은 일 (2026-09-29 기준)
 

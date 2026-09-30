@@ -658,7 +658,7 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .vendor-edit-row select.input { padding: 7px 28px 7px 10px; }
 .vendor-edit-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto auto auto auto;
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
@@ -667,6 +667,8 @@ textarea.input { resize: vertical; line-height: 1.6; }
   background: var(--surface-2);
 }
 .vendor-edit-row .input { padding: 7px 10px; }
+.cycle-input .input { width: 76px; }
+.cycle-input span { white-space: nowrap; }
 .vendor-edit-row.new { background: var(--surface); border-style: dashed; }
 
 .vendor-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
@@ -1071,3 +1073,17 @@ body:has(#pickBar:not([hidden])) .page { padding-bottom: 110px; }
   .product-row > .num:last-child .cell-label { display: none; }
 }
 .product-sub:empty { display: none; }
+
+/* 옵션 상품(색상 등)은 옵션마다 한 줄. 긴 상품명이 잘려도 옵션이 보이게 앞에 칩으로 */
+.option-chip { display: inline-block; max-width: 14em; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; margin-right: 6px; padding: 0 7px; border-radius: 6px; background: var(--brand-soft); color: var(--brand); font-size: 0.82em; font-weight: 600; line-height: 1.6; white-space: nowrap; }
+.info-box { background: var(--brand-soft); color: #2f3f8f; border-radius: 12px; padding: 10px 14px; font-size: 0.86rem; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.detail-stats + .info-box { margin-top: 10px; }
+.task-naver { border-color: var(--danger); background: var(--danger-soft); }
+/* 오늘 할 일: 기록 없이 재고가 늘어난 품목 */
+.task-arrival { grid-column: 1 / -1; }
+.arrival-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.arrival-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); }
+.arrival-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arrival-qty { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.88rem; }
+.arrival-buttons { display: flex; gap: 6px; }
+@media (max-width: 640px) { .arrival-row { grid-template-columns: 1fr; } }

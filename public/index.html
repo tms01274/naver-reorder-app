@@ -160,14 +160,18 @@
     <div class="modal modal-narrow">
       <button class="btn-close" data-close="settingsOverlay" aria-label="닫기">×</button>
       <h3>판단 기준</h3>
-      <p class="modal-desc">최근 판매 속도로 재고가 며칠 버틸지 계산하고, 입고까지 걸리는 기간(라벨의 리드타임)보다 짧으면 발주 필요로 표시해요.</p>
+      <p class="modal-desc">최근 판매 속도로 재고가 며칠 버틸지 계산하고, 입고까지 걸리는 기간(라벨의 리드타임) + 안전 여유일수보다 짧으면 발주 필요로 표시해요.</p>
       <label class="field">판매 속도 계산 기간
         <div class="input-suffix"><input class="input" type="number" id="lookbackDays" min="1" /><span>일</span></div>
         <small>최근 며칠간의 판매량으로 하루 평균 판매량을 계산할지</small>
       </label>
       <label class="field">안전 여유일수
         <div class="input-suffix"><input class="input" type="number" id="bufferDays" min="0" /><span>일</span></div>
-        <small>권장 발주 수량을 계산할 때 리드타임에 더해 확보할 여유분</small>
+        <small>물건이 늦게 오거나 갑자기 많이 팔려도 버틸 여유분. 이만큼 일찍 발주 필요로 알려줘요</small>
+      </label>
+      <label class="field">기본 발주 간격
+        <div class="input-suffix"><input class="input" type="number" id="orderCycleDays" min="0" /><span>일마다</span></div>
+        <small>한 번 발주하면 며칠 뒤에 다시 발주할지. 그동안 팔 양까지 권장 수량에 더해요. 업체마다 발주 기록이 3번 쌓이면 실제 간격으로 자동으로 바뀌고, 그 전까지 이 값을 써요</small>
       </label>
       <div class="modal-actions">
         <button id="applySettings" class="btn-primary">적용</button>

@@ -87,6 +87,9 @@ SUITES.migration = {
     check("예전 메일 양식 → 새 발주서 양식 (3개 언어)", ["ko", "en", "zh"].every((l) => mt.templates[l].body.includes("{{품목목록}}")));
     check("예전 양식은 파일에 보관", JSON.parse(fs.readFileSync(path.join(server.dir, "data", "mail-template.json"), "utf8")).legacy?.body.includes("{{품목명}}"));
     check("옮겨진 업체는 한국어 발주서", vendors.every((v) => !v.lang || v.lang === "ko"));
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    check("서버 켜면 오늘 날짜로 data 백업", fs.existsSync(path.join(server.dir, "data", "backups", today, "suppliers.json")));
   },
 };
 
@@ -285,8 +288,8 @@ SUITES.main = {
 };
 
 SUITES.vendors = {
-  title: "업체 관리 (목록 · 품목 연결)",
-  async run({ p }) {
+  title: "업체 관리 (목록 · 품목 연결 · 발주 간격)",
+  async run({ p, server }) {
     const { toasts, txt, modalHeight } = helpers(p);
     await helpers(p).closeAutoPopup();
     await p.click("#openVendorManager"); await wait(200);
@@ -312,6 +315,27 @@ SUITES.vendors = {
     check("목록에 업체 이름 표시", (await p.$$eval(".vendor-chip", (x) => x.map((e) => e.textContent))).includes("글라스월드"));
     await p.click("#openVendorManager"); await wait(200);
     check("미연결 품목 있으면 연결 탭부터", (await txt("#vendorManagerBody .tab.active")).startsWith("품목 연결"));
+    await p.keyboard.press("Escape"); await wait(150);
+
+    // 발주 간격: 발주 기록에서 자동으로 (업체마다 3번부터, 간격의 중간값), 직접 적으면 그 값
+    const iso = (days) => new Date(Date.now() - days * 864e5).toISOString();
+    const linked = await p.evaluate((id) => currentData.products.find((x) => x.vendorId === id), gwId);
+    const rec = (days) => ({ vendorId: gwId, vendorName: "글라스월드", createdAt: iso(days), items: [{ productId: linked.id, name: linked.name, qty: 1, expectedAt: iso(days - 1), receivedAt: iso(days - 1) }] });
+    check("발주 기록 없으면 기본 발주 간격", linked.orderCycleSource === "default" && linked.orderCycleDays === 14);
+    fs.writeFileSync(path.join(server.dir, "data", "orders.json"), JSON.stringify({ a: rec(32), b: rec(22), c: rec(12), c2: rec(12), d: rec(2) }));
+    await p.goto(server.url, { waitUntil: "networkidle0" }); await wait(300); await helpers(p).closeAutoPopup();
+    const auto = await p.evaluate((id) => currentData.products.find((x) => x.id === id), linked.id);
+    check("발주 기록 간격(같은 날은 한 번)으로 자동 계산", auto.orderCycleSource === "auto" && auto.orderCycleDays === 10, `${auto.orderCycleSource} ${auto.orderCycleDays}`);
+    await p.evaluate((id) => openDetail(id), linked.id); await wait(200);
+    check("상세에 자동 발주 간격 표시", (await p.$eval("#detailBody", (e) => e.textContent)).includes("약 10일"));
+    await p.keyboard.press("Escape"); await wait(150);
+    await p.click("#openVendorManager"); await wait(200);
+    await p.click('#vendorManagerBody [data-mgr-tab="list"]'); await wait(200);
+    const cyc = await p.$(`.vendor-edit-row[data-vendor-id="${gwId}"] .vendor-edit-cycle`);
+    check("업체 목록 발주 간격 칸에 자동 값 안내", (await p.evaluate((e) => e.placeholder, cyc)) === "자동 10");
+    await cyc.type("30"); await p.click(`.vendor-edit-row[data-vendor-id="${gwId}"] .update-vendor-btn`); await wait(700);
+    const manual = await p.evaluate((id) => currentData.products.find((x) => x.id === id), linked.id);
+    check("직접 적으면 그 값 사용", manual.orderCycleSource === "vendor" && manual.orderCycleDays === 30 && manual.coverDays === manual.reorderPointDays + 30);
   },
 };
 
@@ -406,6 +430,19 @@ SUITES.detail = {
       && await p.$$eval(".order-row", (r, n) => r.some((x) => x.textContent.includes(n) && x.querySelector(".order-check").checked), detailName));
     await p.click("#orderOverlay .btn-close"); await wait(150);
     check("X 로 발주서 닫힘", await hidden("orderOverlay"));
+
+    // 최소 주문 수량 · 묶음 단위: 권장 수량을 올림, 비우면 원래대로
+    const target = await p.evaluate(() => currentData.products.find((x) => x.recommendedOrderQty > 2));
+    const recOf = () => p.evaluate((id) => currentData.products.find((x) => x.id === id).recommendedOrderQty, target.id);
+    await p.evaluate((id) => openDetail(id), target.id); await wait(200);
+    await p.type("#packSize", "7"); await p.keyboard.press("Enter"); await wait(700);
+    const packed = await recOf();
+    check("묶음 단위로 올림", packed % 7 === 0 && packed >= target.recommendedOrderQty && packed - target.recommendedOrderQty < 7, `${target.recommendedOrderQty} → ${packed}`);
+    check("올렸다고 안내", (await p.$eval("#detailBody", (e) => e.textContent)).includes("7개 묶음에 맞춰"));
+    await p.type("#minOrderQty", "100"); await p.keyboard.press("Enter"); await wait(700);
+    check("최소 주문 수량 + 묶음 단위", (await recOf()) === 105, String(await recOf()));
+    for (const id of ["#minOrderQty", "#packSize"]) { await p.click(id, { clickCount: 3 }); await p.keyboard.press("Backspace"); await p.keyboard.press("Enter"); await wait(700); }
+    check("비우면 원래 권장 수량", (await recOf()) === target.recommendedOrderQty);
   },
 };
 
@@ -537,9 +574,7 @@ SUITES.monitor = {
     check("같은 품목 두 발주 → 먼저 한 발주만 자동 입고", saved.o2.items[0].autoReceived === true && !saved.o3.items[0].receivedAt);
     await p.click('.tab[data-tab="all"]'); await wait(150);
     check("자동 입고된 품목에 '자동 입고됨' 표시", (await p.$$eval(".pending-chip.arrived", (x) => x.map((e) => e.textContent))).some((t) => t.startsWith("자동 입고됨")));
-    check("입고했는데 재고 그대로 → 알림", (await tasks()).some((t) => t.startsWith("스마트스토어 재고를 올렸나요? · 1품목")));
-    await p.click("#todayTasks [data-task-alt]"); await wait(700);
-    check("'이미 올렸어요' → 알림 사라짐", !(await tasks()).some((t) => t.startsWith("스마트스토어 재고를")));
+    check("'재고 올렸나요' 알림은 없음 (매장은 재고를 항상 올림)", !(await tasks()).some((t) => t.startsWith("스마트스토어 재고를")));
     await p.click("#openOrdersBtn"); await wait(300);
     await p.click('[data-orders-tab="all"]'); await wait(200);
     check("발주 기록에 자동 입고 표시", (await p.$$eval(".arrived-note", (x) => x.map((e) => e.textContent))).some((t) => t.includes("자동 입고")));
@@ -549,6 +584,37 @@ SUITES.monitor = {
     const afterUndo = JSON.parse(fs.readFileSync(ordersFile, "utf8"));
     const undone = Object.values(afterUndo).flatMap((o) => o.items).find((i) => i.noAuto);
     check("자동 입고 되돌리면 다시 자동 처리 안 함", !!undone && !undone.receivedAt, JSON.stringify(Object.values(afterUndo).flatMap((o) => o.items.map((i) => [i.name.slice(0, 6), !!i.receivedAt, !!i.autoReceived, !!i.noAuto]))));
+
+    // ── 발주 기록 없이 재고가 늘면 물어본다 ('발주 완료로 처리'를 깜빡한 발주가 도착)
+    const watchFile = path.join(server.dir, "data", "stock-watch.json");
+    const openIds = new Set(Object.values(afterUndo).flatMap((o) => o.items.filter((i) => !i.receivedAt).map((i) => i.productId)));
+    const [F, G, H] = products.filter((x) => !openIds.has(x.id) && x.id !== E.id && x.stockQuantity >= 10);
+    const watch = JSON.parse(fs.readFileSync(watchFile, "utf8"));
+    const nowIso = new Date().toISOString();
+    const lower = (x, n) => { watch.snapshot[x.id] = { stock: x.stockQuantity - n, at: nowIso }; };
+    lower(F, 10); lower(G, 6); lower(H, 2); lower(E, 10); lower(products.find((x) => openIds.has(x.id)), 10);
+    fs.writeFileSync(watchFile, JSON.stringify(watch));
+    await reload();
+    const riseNames = await p.$$eval(".arrival-row .name", (x) => x.map((e) => e.title));
+    check("기록 없이 재고 늘면 알림 (반품 정도 · 입고 대기 · 직접 입고한 품목은 제외)", (await tasks()).includes("재고가 늘었는데 발주 기록이 없어요 · 2품목") && riseNames.includes(F.name) && riseNames.includes(G.name), riseNames.join(" | "));
+    const clickRise = (name, sel) => p.evaluate((n, s) => [...document.querySelectorAll(".arrival-row")].find((r) => r.querySelector(".name").title === n).querySelector(s).click(), name, sel);
+    await clickRise(F.name, "[data-rise-yes]"); await wait(800);
+    const late = Object.values(JSON.parse(fs.readFileSync(ordersFile, "utf8"))).find((o) => o.lateRecord);
+    check("'발주였어요' → 늘어난 수량으로 입고 완료 기록 (발주일은 리드타임만큼 앞)", !!late && late.items[0].productId === F.id && late.items[0].qty === 10 && !!late.items[0].receivedAt
+      && Math.round((Date.now() - new Date(late.createdAt).getTime()) / DAY) === F.leadTimeDays, JSON.stringify(late));
+    await clickRise(G.name, "[data-rise-no]"); await wait(800);
+    check("'아니에요' → 기록 없이 알림만 지움", !(await tasks()).some((t) => t.startsWith("재고가 늘었는데")) && Object.values(JSON.parse(fs.readFileSync(ordersFile, "utf8"))).filter((o) => o.lateRecord).length === 1);
+    await p.click("#openOrdersBtn"); await wait(300); await p.click('[data-orders-tab="all"]'); await wait(200);
+    check("발주 기록에 '나중에 기록' 표시", (await p.$$eval(".direct-badge", (x) => x.map((e) => e.textContent))).includes("나중에 기록"));
+    await p.keyboard.press("Escape"); await wait(150);
+
+    // ── 스토어에서 지운(판매중지) 품목의 발주: 자동 입고가 안 되니 '빼기'만, 입고 대기 숫자에서 뺌
+    fs.writeFileSync(ordersFile, JSON.stringify({ g: { vendorId: "", vendorName: "업체 미지정", createdAt: nowIso, items: [{ productId: "9999999", name: "지운 상품", qty: 5, expectedAt: nowIso }] } }));
+    await reload();
+    await p.click("#openOrdersBtn"); await wait(300);
+    check("스토어에 없는 품목 표시 · 빼기만", (await txt(".order-item-state")) === "스토어에 없는 품목" && !(await p.$(".order-item [data-receive]")) && !!(await p.$(".order-item [data-remove-item]")));
+    check("입고 대기 숫자에서 뺌", !(await p.$('[data-orders-tab="pending"] .dot-badge')));
+    await p.keyboard.press("Escape"); await wait(150);
 
     // ── 첫 화면에서 체크해서 발주 완료로 처리 (업체별로 나눠 기록, 업체 없는 품목도)
     fs.writeFileSync(ordersFile, "{}"); await reload();
@@ -605,40 +671,78 @@ SUITES.naver = {
     // 2026-09 매장 스토어 실제 응답의 "모양"을 흉내 낸 가짜 응답으로 naverClient 를 돌린다 (값은 가짜)
     const realFetch = global.fetch;
     const hourAgo = new Date(Date.now() - 3600e3).toISOString();
-    const order = (id, pid, qty, status) => ({
+    const order = (id, pid, qty, status, productOption) => ({
       productOrderId: id,
       content: {
         order: { orderId: "o" + id, paymentDate: hourAgo, orderDate: hourAgo },
-        productOrder: { productOrderId: id, productId: pid, quantity: qty, productOrderStatus: status },
+        productOrder: { productOrderId: id, productId: pid, quantity: qty, productOrderStatus: status, ...(productOption ? { productOption } : {}) },
       },
     });
+    const calls = { orders: 0, detail: 0 };
     global.fetch = async (url) => {
       const u = String(url);
       const json = (d) => ({ ok: true, status: 200, text: async () => JSON.stringify(d), json: async () => d });
       if (u.includes("oauth2/token")) return json({ access_token: "t", expires_in: 10800 });
       if (u.includes("products/search")) {
-        return json({ contents: [{ originProductNo: 1, channelProducts: [{ channelProductNo: 111, name: "시트지", stockQuantity: 5, salePrice: 1000, representativeImage: { url: "https://shop-phinf.pstatic.net/a.jpg" } }] }] });
+        const cp = (no, name, statusType, stockQuantity) => ({ originProductNo: no, channelProducts: [{ channelProductNo: no * 111, name, statusType, stockQuantity, salePrice: 1000, modifiedDate: "2026-09-01", representativeImage: { url: "https://shop-phinf.pstatic.net/a.jpg" } }] });
+        return json({ contents: [cp(1, "시트지", "SALE", 5), cp(2, "컬러 시트지", "SALE", 9), cp(3, "품절 납선", "OUTOFSTOCK", 0), cp(4, "안 파는 상품", "SUSPENSION", 0)] });
+      }
+      // 원상품 상세: 2번 상품만 옵션(색상 3개, 그중 1개는 사용 안 함)
+      if (u.includes("origin-products/")) {
+        calls.detail++;
+        if (!u.endsWith("/2")) return json({ originProduct: { detailAttribute: { optionInfo: {} } } });
+        return json({ originProduct: { detailAttribute: { optionInfo: { useStockManagement: true, optionCombinations: [
+          { id: 501, optionName1: "1 베이지", stockQuantity: 2, price: 0, usable: true },
+          { id: 502, optionName1: "11 베이지", stockQuantity: 7, price: 500, usable: true },
+          { id: 503, optionName1: "단종색", stockQuantity: 0, price: 0, usable: false },
+        ] } } } });
       }
       if (u.includes("product-orders")) {
-        return json({ data: { contents: [order("A", "111", 3, "DELIVERED"), order("A", "111", 3, "DELIVERED"), order("B", "111", 2, "CANCELED"), order("C", "111", 4, "PAYED"), order("D", "111", 1, "RETURNED")], pagination: { hasNext: false } } });
+        calls.orders++;
+        return json({ data: { contents: [order("A", "111", 3, "DELIVERED"), order("A", "111", 3, "DELIVERED"), order("B", "111", 2, "CANCELED"), order("C", "111", 4, "PAYED"), order("D", "111", 1, "RETURNED"),
+          order("E", "222", 6, "PAYED", "색상: 11 베이지"), order("F", "222", 1, "PAYED", "색상: 1 베이지")], pagination: { hasNext: false } } });
       }
       throw new Error("모르는 요청 " + u);
     };
     process.env.NAVER_CLIENT_ID = "x";
     process.env.NAVER_CLIENT_SECRET = "$2a$10$abcdefghijklmnopqrstuv"; // bcrypt salt 형식
+    // 옵션 · 주문을 파일로 남겨 두는 곳 (실제 data 폴더 대신)
+    const cacheDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "mali-naver-"));
+    process.env.NAVER_CACHE_DIR = cacheDir;
     try {
       const modPath = require.resolve(path.join(__dirname, "..", "..", "src", "naverClient.js"));
       delete require.cache[modPath];
       const client = require(modPath);
+      const { assignOrdersToOptionRows } = require(path.join(__dirname, "..", "..", "src", "productOptions.js"));
       const products = await client.fetchProducts();
       check("상품 대표 사진 주소 읽기", products[0].imageUrl === "https://shop-phinf.pstatic.net/a.jpg", products[0].imageUrl);
+      check("판매중지 상품은 빼고 품절은 남김", !products.some((x) => x.name === "안 파는 상품") && products.some((x) => x.name === "품절 납선"));
+      const opt = products.filter((x) => x.parentId === "222");
+      check("옵션 상품은 옵션마다 한 줄 (사용 안 하는 옵션 제외)", opt.length === 2 && !products.some((x) => x.id === "222")
+        && opt.some((x) => x.id === "222_501" && x.optionName === "1 베이지" && x.stockQuantity === 2 && x.name === "컬러 시트지 (1 베이지)")
+        && opt.some((x) => x.id === "222_502" && x.salePrice === 1500), JSON.stringify(opt.map((x) => [x.id, x.optionName, x.stockQuantity])));
+      const detailCalls = calls.detail;
+      await client.fetchProducts();
+      check("옵션 정보는 바뀐 상품만 다시 조회", calls.detail === detailCalls, `${detailCalls} → ${calls.detail}`);
       const orders = await client.fetchRecentOrders(1);
-      check("주문을 content.productOrder 에서 읽기 (품목 번호·수량)", orders.every((o) => o.productId === "111") && orders.some((o) => o.quantity === 3));
-      check("취소·반품 주문은 판매에서 제외", !orders.some((o) => o.quantity === 2 || o.quantity === 1));
-      check("같은 주문이 두 번 와도 한 번만", orders.length === 2, String(orders.length));
+      const plain = orders.filter((o) => o.productId === "111");
+      check("주문을 content.productOrder 에서 읽기 (품목 번호·수량)", plain.some((o) => o.quantity === 3));
+      check("취소·반품 주문은 판매에서 제외", !plain.some((o) => o.quantity === 2 || o.quantity === 1));
+      check("같은 주문이 두 번 와도 한 번만", plain.length === 2, String(plain.length));
       check("주문 날짜 = 결제일", orders.every((o) => o.orderedAt === hourAgo));
+      const matched = assignOrdersToOptionRows(products, orders).filter((o) => o.parentId === "222");
+      check("옵션 주문 → 그 옵션 줄 (1 베이지 / 11 베이지 구분)", matched.find((o) => o.quantity === 6)?.productId === "222_502" && matched.find((o) => o.quantity === 1)?.productId === "222_501");
+      // 주문은 날짜별로 남겨 두고 최근 7일만 다시 받는다
+      calls.orders = 0;
+      await client.fetchRecentOrders(20);
+      const first = calls.orders;
+      calls.orders = 0;
+      const again = await client.fetchRecentOrders(20);
+      check("두 번째부터는 최근 날짜만 다시 조회", first >= 21 && calls.orders <= 9 && again.length === orders.length, `${first} → ${calls.orders}`);
     } finally {
       global.fetch = realFetch;
+      delete process.env.NAVER_CACHE_DIR;
+      fs.rmSync(cacheDir, { recursive: true, force: true });
     }
   },
 };
@@ -699,6 +803,11 @@ SUITES.today = {
     check("고르게 팔리면 대량 주문 아님", even === null);
     const small = await p.evaluate(() => spikeInfo({ dailySales: [0, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0], leadTimeDays: 7, bufferDays: 3, stockQuantity: 0 }));
     check("적은 수량은 대량 주문으로 안 봄", small === null);
+
+    // 네이버 연결이 끊기면 맨 위에 알림 (예전 데이터로 보여주는 중)
+    await p.evaluate(() => { currentData.naver = { ok: false, message: "매장 인터넷 주소(IP)가 바뀌어서 네이버가 연결을 막았어요.", lastSuccessAt: new Date(Date.now() - 3 * 3600e3).toISOString() }; render(); });
+    const first = await p.$eval("#todayTasks .task-card", (e) => e.textContent);
+    check("네이버 연결 끊김 → 맨 위 알림", first.includes("네이버 연결이 안 돼요") && first.includes("받은 데이터로 보여주고 있어요") && first.includes("IP"));
   },
 };
 
@@ -713,6 +822,14 @@ SUITES.settings = {
     check("빈 값 적용 → 에러, 팝업 유지", (await toasts()).some((t) => t.includes("1일 이상")) && !(await hidden("settingsOverlay")));
     await p.type("#lookbackDays", "30"); await p.click("#applySettings"); await wait(600);
     check("적용 → 닫힘 + 문구 갱신", (await hidden("settingsOverlay")) && (await txt("#criteriaText")).includes("최근 30일"));
+    const list = await p.evaluate(() => currentData.products);
+    check("발주 필요 = 남은 기간 ≤ 리드타임 + 안전 여유", list.filter((x) => x.dailyVelocity > 0 && !x.pendingOrder).every((x) => x.needsReorder === (x.daysLeft <= x.leadTimeDays + x.bufferDays)));
+    const total = (l) => l.reduce((a, x) => a + x.recommendedOrderQty, 0);
+    await p.click("#openSettings"); await wait(150);
+    check("기본 발주 간격 기본값 14", (await p.$eval("#orderCycleDays", (e) => e.value)) === "14");
+    await p.click("#orderCycleDays", { clickCount: 3 }); await p.type("#orderCycleDays", "0"); await p.click("#applySettings"); await wait(600);
+    const list0 = await p.evaluate(() => currentData.products);
+    check("발주 간격 0 → 입고까지 버틸 만큼만 (권장 수량 줄어듦)", (await txt("#criteriaText")).includes("기본 발주 간격 0일") && total(list0) < total(list), `${total(list)} → ${total(list0)}`);
   },
 };
 
