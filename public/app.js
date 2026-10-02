@@ -1279,6 +1279,9 @@ async function recordCurrentOrder() {
   await loadProducts();
 }
 
+const GMAIL_URL_MAX = 7000; // Gmail 쓰기 주소 길이 한도 (여유 있게)
+const GMAIL_PASTE_HINT = "[발주 내용이 길어서 복사해 뒀어요. 이 칸을 누르고 Ctrl + A 를 누른 다음 Ctrl + V 를 누르세요]";
+
 function renderOrderMail() {
   const mail = buildOrderMail();
   const vendor = vendorById(order.vendorId);
@@ -1302,7 +1305,7 @@ function renderOrderMail() {
     <div class="order-pane">
     <ol class="mail-steps">
       <li>위 <b>Gmail로 보내기</b>를 누르면 받는 사람 · 제목 · 본문이 채워진 Gmail 쓰기 창이 열려요.</li>
-      <li>내용을 확인하고 Gmail에서 <b>보내기</b>를 눌러요. (칸이 비어 있으면 아래 <b>복사</b> 버튼으로 붙여넣으세요)</li>
+      <li>내용을 확인하고 Gmail에서 <b>보내기</b>를 눌러요. 품목이 많으면 본문은 복사만 돼 있어요. Gmail 본문 칸을 누르고 <b>Ctrl + A</b>, <b>Ctrl + V</b>를 누르세요.</li>
       <li>보냈으면 위 <b>발주 완료로 처리</b>를 눌러요.</li>
     </ol>
     <div class="mail-field">
@@ -1322,11 +1325,29 @@ function renderOrderMail() {
   `;
   $("orderRecord").addEventListener("click", recordCurrentOrder);
   order.draftSaved = false; // 품목을 다시 골랐을 수 있으니 이 메일 화면에서 다시 저장
-  // 누르는 순간의 칸 내용(고친 내용 포함)으로 Gmail 쓰기 주소를 만든다
-  $("orderOpenGmail").addEventListener("click", (e) => {
+  // 누르는 순간의 칸 내용(고친 내용 포함)으로 Gmail 쓰기 창을 연다.
+  // Gmail 은 주소가 너무 길면(실측 8천 자는 되고 1만2천 자는 400 오류) 거부해서, 본문이 길면
+  // 받는 사람 · 제목만 채워 열고 본문은 복사해 둔 뒤 붙여넣으라고 알려준다 (한글은 주소에서 한 글자가 9자)
+  $("orderOpenGmail").addEventListener("click", async (e) => {
+    e.preventDefault();
+    const link = e.currentTarget; // await 뒤에는 e.currentTarget 이 비어 있어서 미리 잡아 둔다
     saveOrderDraft();
-    const q = new URLSearchParams({ view: "cm", fs: "1", to: $("orderTo").value.trim(), su: $("orderSubject").value, body: $("orderMailBody").value });
-    e.currentTarget.href = `https://mail.google.com/mail/?${q.toString()}`;
+    const enc = encodeURIComponent;
+    const base = `https://mail.google.com/mail/?view=cm&fs=1&to=${enc($("orderTo").value.trim())}&su=${enc($("orderSubject").value)}`;
+    const full = `${base}&body=${enc($("orderMailBody").value)}`;
+    if (full.length <= GMAIL_URL_MAX) {
+      link.href = full;
+      window.open(full, "_blank", "noopener");
+      return;
+    }
+    const copied = await copyText($("orderMailBody").value);
+    // Gmail 본문 칸에 할 일을 적어 둔다 (전체 선택 후 붙여넣으면 이 글은 사라지고 발주 내용이 들어감)
+    const hint = copied ? `&body=${enc(GMAIL_PASTE_HINT)}` : "";
+    link.href = base + hint;
+    window.open(base + hint, "_blank", "noopener");
+    toast(copied
+      ? "본문이 길어서 Gmail에 다 못 넣었어요. 본문을 복사해 뒀으니 Gmail 본문 칸을 누르고 Ctrl + V 를 누르세요"
+      : "본문이 길어서 Gmail에 다 못 넣었어요. 아래 본문 '복사'를 눌러 Gmail 본문 칸에 붙여넣으세요", copied ? "info" : "error");
   });
   document.querySelectorAll("[data-copy]").forEach((btn) => {
     btn.addEventListener("click", async () => {

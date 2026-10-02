@@ -392,11 +392,18 @@ SUITES.order = {
     const clip = await p.evaluate(() => navigator.clipboard.readText().catch(() => null));
     check("본문 복사", clip === null ? (await p.$eval('[data-copy="orderMailBody"]', (e) => e.textContent)).includes("복사됨") : clip === body);
     // Gmail 쓰기 창: 누르는 순간 받는 사람 · 제목 · 본문이 주소에 채워짐
-    await p.evaluate(() => $("orderOpenGmail").addEventListener("click", (e) => e.preventDefault())); // 테스트에서는 진짜 Gmail 을 열지 않음
+    await p.evaluate(() => { window.open = (u) => { window.__opened = u; }; }); // 테스트에서는 진짜 Gmail 을 열지 않음
     await p.click("#orderOpenGmail"); await wait(200);
-    const gmail = new URL(await p.$eval("#orderOpenGmail", (a) => a.href));
+    const gmail = new URL(await p.evaluate(() => window.__opened));
     check("Gmail 쓰기 창에 받는 사람 · 제목 · 본문", gmail.hostname === "mail.google.com" && gmail.searchParams.get("view") === "cm"
       && gmail.searchParams.get("to") === to && gmail.searchParams.get("su") === subject && gmail.searchParams.get("body") === body);
+    // 본문이 길면 (Gmail 주소 한도) 받는 사람 · 제목만 채우고 본문은 복사 + 붙여넣기 안내
+    await p.$eval("#orderMailBody", (e) => { e.value = "가나다라마바사 — 10개\n".repeat(400); });
+    await p.click("#orderOpenGmail"); await wait(400);
+    const long = await p.evaluate(() => window.__opened);
+    const longUrl = new URL(long);
+    check("본문이 길면 주소는 짧게 + 붙여넣기 안내", long.length < 7000 && longUrl.searchParams.get("to") === to && longUrl.searchParams.get("body").includes("Ctrl + V"), String(long.length));
+    await p.$eval("#orderMailBody", (e, b) => { e.value = b; }, body);
     check("메일 화면: 발주 완료로 처리은 위쪽 고정", await p.evaluate(() => !!document.querySelector("#orderBody .order-top #orderRecord") && !!document.querySelector("#orderBody .order-pane #orderMailBody")));
     await p.click("#orderBack"); await wait(200);
     check("품목 다시 고르기 → 선택 유지", (await p.$eval(".order-row .order-qty", (e) => e.value)) === "50");
@@ -660,7 +667,7 @@ SUITES.monitor = {
     check("알림에서 발주 완료로 처리", Number(await txt("#tabCountPending")) > pendingBefore && !(await tasks()).some((t) => t.startsWith("보낸 발주 메일")));
     await p.click("#openOrderBtn"); await wait(200); await p.click('[data-order-vendor="gw"]'); await wait(250);
     await p.click(".order-row .order-name"); await wait(100); // 이미 발주한 품목은 미리 체크 안 되므로 하나 체크
-    await p.click("#orderToMail"); await wait(250); await p.evaluate(() => $("orderOpenGmail").addEventListener("click", (e) => e.preventDefault())); // 테스트에서는 진짜 Gmail 을 열지 않음
+    await p.click("#orderToMail"); await wait(250); await p.evaluate(() => { window.open = () => {}; }); // 테스트에서는 진짜 Gmail 을 열지 않음
     await p.click("#orderOpenGmail"); await wait(400);
     await p.keyboard.press("Escape"); await reload();
     await p.click(".task-draft [data-task-alt]"); await wait(100); await p.click(".task-draft [data-task-alt]"); await wait(700);
