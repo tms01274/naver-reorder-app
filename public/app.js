@@ -2470,7 +2470,11 @@ function marketKeysHtml() {
   return `
     <div class="market-keys">
       <strong>${changing ? "검색 키 바꾸기" : "처음 한 번만, 네이버 쇼핑 검색 키를 넣어주세요"}</strong>
-      <p class="muted">네이버에서 무료로 받는 열쇠예요. 관리자에게 받은 키가 있으면 바로 아래에 붙여넣으면 돼요.</p>
+      <p class="muted">스토어 네이버 아이디로 무료로 받는 열쇠예요. 아래 '직접 받는 방법' 순서대로 한 번만 하면 계속 쓸 수 있어요.</p>
+      <div class="info-box market-keys-diff">
+        <b>원래 쓰던 키와는 다른 키예요.</b>
+        원래 키(커머스API)는 <b>우리 스토어</b>의 상품 · 재고 · 주문만 볼 수 있어서 발주 계산에 써요. 이 키(쇼핑 검색)는 <b>네이버 쇼핑 전체</b>에서 다른 가게 상품을 찾을 때 써요. 원래 키는 그대로 두면 되고, 여기서는 검색 키만 새로 받아 넣으면 돼요.
+      </div>
       <div class="market-keys-form">
         <input id="marketKeyId" class="input" type="text" placeholder="Client ID" autocomplete="off" />
         <input id="marketKeySecret" class="input" type="text" placeholder="Client Secret" autocomplete="off" />
@@ -2486,7 +2490,7 @@ function marketKeysHtml() {
           <li><b>비로그인 오픈 API 서비스 환경</b>: <b>WEB 설정</b>을 고르고, 웹 서비스 URL 에 <code>http://localhost:3000</code> 을 적어요.</li>
           <li>맨 아래 <b>등록하기</b>를 누르면 <b>Client ID</b> 와 <b>Client Secret</b> 이 보여요. 각각 복사해서 위 칸에 붙여넣고 '확인하고 저장'을 눌러요.</li>
         </ol>
-        <p class="muted">스마트스토어 판매에 쓰는 키(커머스API)와는 다른 키예요. 검색은 하루 2만 번 넘게 할 수 있어서 넉넉해요.</p>
+        <p class="muted">받는 곳도 원래 키(커머스API센터)와 달라요. 꼭 위 링크의 '네이버 개발자센터'에서 받아주세요. 검색은 하루 2만 번 넘게 할 수 있어서 넉넉해요.</p>
       </details>
     </div>`;
 }

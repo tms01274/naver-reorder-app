@@ -11,7 +11,8 @@ $s.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $s.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$AppDir\windows-autostart\launch.ps1`""
 $s.WorkingDirectory = $AppDir
 $s.WindowStyle = 7
-$s.IconLocation = "$env:SystemRoot\System32\shell32.dll,21"
+$icon = Join-Path $AppDir "windows-autostart\app.ico"
+$s.IconLocation = if (Test-Path $icon) { "$icon,0" } else { "$env:SystemRoot\System32\shell32.dll,21" }
 $s.Description = "재고 발주 도우미 열기 (자동 업데이트 포함)"
 $s.Save()
 

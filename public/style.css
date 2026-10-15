@@ -1170,3 +1170,5 @@ body:has(#pickBar:not([hidden])) .page { padding-bottom: 110px; }
 .market-keys-howto summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
 .market-keys-howto li { margin: 6px 0; }
 .market-key-link { text-align: right; margin: 16px 0 0; }
+.market-keys-diff { display: block; margin: 0 0 12px; line-height: 1.6; }
+.market-keys-diff > b:first-child { display: block; margin-bottom: 2px; }
