@@ -887,6 +887,11 @@ SUITES.market = {
     check("상단 '시장 조사' → 창 열림 (샘플 모드)", !(await hidden("marketOverlay")) && (await p.$eval("#marketBody", (e) => e.textContent)).includes("샘플 데이터"));
     await p.click("[data-keyword]"); await wait(900);
     check("검색 → 가격 중간값 · 상품 목록", (await p.$eval("#marketBody", (e) => e.textContent)).includes("가격 중간값") && (await p.$$(".market-item")).length > 10);
+    const trendText = await p.$eval(".trend-card", (e) => e.textContent);
+    check("검색 흐름: 3년 그래프 + 작년 대비 + 많이 찾는 달", !!(await p.$("#trendChart .trend-line")) && /작년 이맘때/.test(trendText) && /월에 많이 찾아요|꾸준히/.test(trendText), trendText.slice(0, 80));
+    const box = await (await p.$("#trendHit")).boundingBox();
+    await p.mouse.move(box.x + box.width * 0.5, box.y + 30); await wait(100);
+    check("그래프에 마우스 → 그 달 값", /\d{4}년 \d+월 · \d+/.test(await p.$eval("#trendTip", (e) => (e.hidden ? "" : e.textContent))));
     const missing = await p.$$eval(".word-chip.missing", (b) => b.map((x) => x.dataset.word));
     check("우리 스토어에 없는 품목 단어", missing.length > 0, missing.join(","));
     await p.click(".word-chip.missing"); await wait(300);

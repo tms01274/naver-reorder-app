@@ -2486,7 +2486,7 @@ function marketKeysHtml() {
         <ol>
           <li><a href="https://developers.naver.com/apps/#/register" target="_blank" rel="noopener"><b>여기를 눌러</b> 네이버 개발자센터</a>를 열고, 스토어에 쓰는 네이버 아이디로 로그인해요. 처음이면 약관 동의와 휴대폰 인증이 나올 수 있어요.</li>
           <li><b>애플리케이션 이름</b>: <code>아틀리에말리</code> 처럼 아무 이름이나 적어요.</li>
-          <li><b>사용 API</b>: 목록에서 <b>검색</b>을 골라요.</li>
+          <li><b>사용 API</b>: 목록에서 <b>검색</b>을 고르고, 한 번 더 눌러 <b>데이터랩 (검색어트렌드)</b> 도 골라요. 두 개가 같이 있어야 상품과 검색 흐름이 모두 보여요.</li>
           <li><b>비로그인 오픈 API 서비스 환경</b>: <b>WEB 설정</b>을 고르고, 웹 서비스 URL 에 <code>http://localhost:3000</code> 을 적어요.</li>
           <li>맨 아래 <b>등록하기</b>를 누르면 <b>Client ID</b> 와 <b>Client Secret</b> 이 보여요. 각각 복사해서 위 칸에 붙여넣고 '확인하고 저장'을 눌러요.</li>
         </ol>
@@ -2510,6 +2510,101 @@ function marketItemHtml(it, ours, inCand) {
       <div class="market-price">${won(it.price)}</div>
       ${ours ? "<span></span>" : `<button type="button" class="btn-outline btn-sm" data-cand-add="${escapeHtml(it.id)}" ${inCand ? "disabled" : ""}>${inCand ? "담았어요" : "후보 담기"}</button>`}
     </div>`;
+}
+
+// ── 검색 흐름 (최근 3년 달별 검색량, 가장 많던 달 = 100) ──
+const TREND_BOX = { w: 640, h: 150, left: 30, right: 10, top: 10, bottom: 24 };
+
+function trendX(i, n) {
+  const b = TREND_BOX;
+  return b.left + (i * (b.w - b.left - b.right)) / Math.max(1, n - 1);
+}
+function trendY(ratio) {
+  const b = TREND_BOX;
+  return b.top + (1 - ratio / 100) * (b.h - b.top - b.bottom);
+}
+
+function trendChartSvg(points) {
+  const b = TREND_BOX;
+  const n = points.length;
+  const line = points.map((p, i) => `${i ? "L" : "M"}${trendX(i, n).toFixed(1)},${trendY(p.ratio).toFixed(1)}`).join("");
+  const grid = [0, 50, 100].map((v) => `
+    <line x1="${b.left}" x2="${b.w - b.right}" y1="${trendY(v)}" y2="${trendY(v)}" class="trend-grid" />
+    <text x="${b.left - 6}" y="${trendY(v) + 4}" class="trend-axis" text-anchor="end">${v}</text>`).join("");
+  // 해가 바뀌는 1월에 연도 표시
+  const years = points.map((p, i) => (p.period.endsWith("-01") ? `<text x="${trendX(i, n)}" y="${b.h - 6}" class="trend-axis" text-anchor="middle">${p.period.slice(0, 4)}년</text>` : "")).join("");
+  return `
+    <svg id="trendChart" class="trend-chart" viewBox="0 0 ${b.w} ${b.h}" role="img" aria-label="최근 3년 검색 흐름">
+      ${grid}${years}
+      <path d="${line}" class="trend-line" />
+      <line id="trendCross" class="trend-cross" y1="${b.top}" y2="${b.h - b.bottom}" visibility="hidden" />
+      <circle id="trendDot" class="trend-dot" r="4.5" visibility="hidden" />
+      <rect x="${b.left}" y="0" width="${b.w - b.left - b.right}" height="${b.h}" fill="transparent" id="trendHit" />
+    </svg>`;
+}
+
+function monthsText(months) {
+  // 이어지는 달은 "9월 ~ 12월", 아니면 "3월 · 11월"
+  const runs = [];
+  for (const m of months) {
+    const last = runs[runs.length - 1];
+    if (last && m === last[1] + 1) last[1] = m;
+    else runs.push([m, m]);
+  }
+  return runs.map(([a, b]) => (a === b ? `${a}월` : `${a}월 ~ ${b}월`)).join(" · ");
+}
+
+function trendCardHtml(t, query) {
+  if (!t || t.error) return "";
+  if (t.datalabOff) {
+    return `
+      <div class="trend-card trend-off">
+        <strong>검색 흐름</strong>
+        <p class="muted">요즘 뜨는지, 언제 많이 찾는지 보려면 검색 키에 '데이터랩'을 추가해 주세요.
+        <a href="https://developers.naver.com/apps/#/list" target="_blank" rel="noopener">네이버 개발자센터 → 내 애플리케이션</a> → 만든 애플리케이션 → <b>API 설정</b> → 사용 API 에 <b>데이터랩 (검색어트렌드)</b> 추가 → 수정하기. 키는 그대로라 여기서 다시 넣을 필요 없어요.</p>
+      </div>`;
+  }
+  if (t.empty) return `<div class="trend-card"><strong>검색 흐름</strong><p class="muted">'${escapeHtml(query)}'은(는) 네이버 검색이 너무 적어서 흐름을 볼 수 없어요. 더 흔한 말로 찾아보세요.</p></div>`;
+  const change = t.change === null ? "" : t.change >= 10
+    ? `<span class="trend-fact up">▲ 작년 이맘때보다 ${t.change}% 늘었어요</span>`
+    : t.change <= -10
+      ? `<span class="trend-fact down">▼ 작년 이맘때보다 ${Math.abs(t.change)}% 줄었어요</span>`
+      : `<span class="trend-fact">― 작년 이맘때와 비슷해요</span>`;
+  const season = t.steady
+    ? `<span class="trend-fact">계절 상관없이 꾸준히 찾아요</span>`
+    : `<span class="trend-fact">해마다 <b>${monthsText(t.peakMonths)}</b>에 많이 찾아요</span>`;
+  return `
+    <div class="trend-card">
+      <div class="trend-head"><strong>검색 흐름</strong><span class="muted">최근 3년 네이버 검색량 · 가장 많던 달 = 100</span></div>
+      <div class="trend-facts">${change}${season}</div>
+      <div class="trend-plot">${trendChartSvg(t.points)}<div id="trendTip" class="trend-tip" hidden></div></div>
+    </div>`;
+}
+
+// 그래프 위에 마우스를 올리면 그 달 값 (세로선 + 점 + 말풍선)
+function bindTrendChart(points) {
+  const svg = $("trendChart");
+  if (!svg || !points?.length) return;
+  const tip = $("trendTip");
+  const n = points.length;
+  const hide = () => { $("trendCross").setAttribute("visibility", "hidden"); $("trendDot").setAttribute("visibility", "hidden"); tip.hidden = true; };
+  $("trendHit").addEventListener("mousemove", (e) => {
+    const rect = svg.getBoundingClientRect();
+    const scale = rect.width / TREND_BOX.w;
+    const x = (e.clientX - rect.left) / scale;
+    const i = Math.max(0, Math.min(n - 1, Math.round(((x - TREND_BOX.left) / (TREND_BOX.w - TREND_BOX.left - TREND_BOX.right)) * (n - 1))));
+    const p = points[i];
+    const px = trendX(i, n);
+    const py = trendY(p.ratio);
+    $("trendCross").setAttribute("x1", px); $("trendCross").setAttribute("x2", px); $("trendCross").setAttribute("visibility", "visible");
+    $("trendDot").setAttribute("cx", px); $("trendDot").setAttribute("cy", py); $("trendDot").setAttribute("visibility", "visible");
+    tip.textContent = `${p.period.slice(0, 4)}년 ${Number(p.period.slice(5))}월 · ${Math.round(p.ratio)}`;
+    tip.hidden = false;
+    const left = px * scale;
+    tip.style.left = `${Math.min(Math.max(left, 50), rect.width - 50)}px`;
+    tip.style.top = `${py * scale - 34}px`;
+  });
+  $("trendHit").addEventListener("mouseleave", hide);
 }
 
 function marketResultHtml() {
@@ -2537,6 +2632,7 @@ function marketResultHtml() {
       <div class="stat-box"><div class="label">우리 스토어 상품</div><div class="value" title="${escapeHtml(r.storeMall || "아직 우리 스토어를 못 찾았어요")}">${r.storeMall ? `${r.ourCount}개` : "-"}</div></div>
     </div>
     <p class="market-note muted">${new Date(r.fetchedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" })} 기준 · 관련도 높은 ${r.items.length}개로 계산 <button type="button" class="btn-ghost btn-sm" id="marketRefresh">다시 찾기</button></p>
+    ${trendCardHtml(r.trend, r.query)}
 
     <h4>우리 스토어에 없는 품목 단어 <span class="muted market-h-sub">여러 판매처가 파는데 우리 상품 이름에는 없는 말이에요. 누르면 그 상품만 보여요</span></h4>
     <div class="word-chips">${r.missingWords.map((w) => wordChip(w, "missing")).join("") || `<span class="muted">눈에 띄는 단어가 없어요</span>`}</div>
@@ -2665,6 +2761,7 @@ function bindMarket() {
   });
   body.querySelectorAll("[data-keyword]").forEach((b) => b.addEventListener("click", () => runMarketSearch(b.dataset.keyword)));
   $("marketRefresh")?.addEventListener("click", () => runMarketSearch(marketState.query, true));
+  bindTrendChart(marketState.result?.trend?.points);
   body.querySelectorAll("[data-word]").forEach((b) => b.addEventListener("click", () => {
     marketState.word = marketState.word === b.dataset.word ? "" : b.dataset.word;
     renderMarket();

@@ -1172,3 +1172,21 @@ body:has(#pickBar:not([hidden])) .page { padding-bottom: 110px; }
 .market-key-link { text-align: right; margin: 16px 0 0; }
 .market-keys-diff { display: block; margin: 0 0 12px; line-height: 1.6; }
 .market-keys-diff > b:first-child { display: block; margin-bottom: 2px; }
+
+/* 시장 조사: 검색 흐름 */
+.trend-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 10px; margin-top: 14px; }
+.trend-off, .trend-card:not(:has(.trend-plot)) { padding-bottom: 14px; }
+.trend-card p { margin: 6px 0 0; font-size: 0.86rem; line-height: 1.6; }
+.trend-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.trend-head .muted { font-size: 0.76rem; }
+.trend-facts { display: flex; gap: 8px 16px; flex-wrap: wrap; margin: 8px 0 4px; font-size: 0.9rem; color: var(--ink-2); }
+.trend-fact.up { color: var(--ok); font-weight: 700; }
+.trend-fact.down { color: var(--danger); font-weight: 700; }
+.trend-plot { position: relative; }
+.trend-chart { display: block; width: 100%; height: auto; }
+.trend-grid { stroke: var(--line); stroke-width: 1; }
+.trend-axis { fill: var(--faint); font-size: 11px; font-family: inherit; }
+.trend-line { fill: none; stroke: var(--brand); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-cross { stroke: var(--line-strong); stroke-width: 1; }
+.trend-dot { fill: var(--brand); stroke: var(--surface); stroke-width: 2; }
+.trend-tip { position: absolute; transform: translateX(-50%); background: var(--ink); color: #fff; font-size: 0.78rem; font-weight: 600; padding: 4px 8px; border-radius: 6px; white-space: nowrap; pointer-events: none; }

@@ -154,6 +154,107 @@ function sampleItems(query) {
   return { items, total: 1234 };
 }
 
+// ── 검색 흐름 (네이버 데이터랩 검색어 트렌드, 같은 검색 키 · 애플리케이션에 '데이터랩'을 추가해야 함) ──
+const TREND_MONTHS = 36;
+const TREND_TTL_MS = 24 * 60 * 60 * 1000;
+
+class DatalabOffError extends Error {}
+
+function ym(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// 지난 3년, 끝난 달까지만 (이번 달은 아직 덜 차서 낮게 나옴)
+function trendRange(now = new Date()) {
+  const end = new Date(now.getFullYear(), now.getMonth(), 0);
+  const start = new Date(end.getFullYear(), end.getMonth() - TREND_MONTHS + 1, 1);
+  const iso = (d) => `${ym(d)}-${String(d.getDate()).padStart(2, "0")}`;
+  return { startDate: iso(start), endDate: iso(end), start, end };
+}
+
+async function fetchTrend(query) {
+  const { startDate, endDate } = trendRange();
+  const res = await fetch("https://openapi.naver.com/v1/datalab/search", {
+    method: "POST",
+    headers: {
+      "X-Naver-Client-Id": String(process.env.NAVER_SEARCH_CLIENT_ID || "").trim(),
+      "X-Naver-Client-Secret": String(process.env.NAVER_SEARCH_CLIENT_SECRET || "").trim(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ startDate, endDate, timeUnit: "month", keywordGroups: [{ groupName: query, keywords: [query] }] }),
+    signal: AbortSignal.timeout(10000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401 || res.status === 403) throw new DatalabOffError(body.errorMessage || String(res.status));
+  if (!res.ok) throw new Error(`검색 흐름을 가져오지 못했어요 (${res.status})`);
+  const byMonth = new Map((body.results?.[0]?.data || []).map((d) => [d.period.slice(0, 7), Number(d.ratio) || 0]));
+  return fillMonths(byMonth);
+}
+
+// 검색이 거의 없는 달은 데이터랩이 빼고 주므로 0 으로 채운다
+function fillMonths(byMonth) {
+  const { start } = trendRange();
+  const points = [];
+  for (let i = 0; i < TREND_MONTHS; i++) {
+    const period = ym(new Date(start.getFullYear(), start.getMonth() + i, 1));
+    points.push({ period, ratio: Math.round((byMonth.get(period) || 0) * 10) / 10 });
+  }
+  return points;
+}
+
+function sampleTrend(query) {
+  const { start } = trendRange();
+  const seed = [...query].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const byMonth = new Map();
+  for (let i = 0; i < TREND_MONTHS; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+    const season = Math.max(0, Math.cos(((d.getMonth() - 10 - (seed % 3)) / 12) * Math.PI * 2));
+    byMonth.set(ym(d), 18 + i * 0.9 + season * 45 + ((seed * (i + 3)) % 9));
+  }
+  const max = Math.max(...byMonth.values());
+  for (const [k, v] of byMonth) byMonth.set(k, (v / max) * 100);
+  return fillMonths(byMonth);
+}
+
+/**
+ * 그래프 아래 두 줄 요약
+ * - change: 최근 3달 검색이 1년 전 같은 3달보다 몇 % 늘었는지
+ * - peakMonths: 해마다 많이 찾는 달 (달별 평균이 가장 높은 달의 85% 이상). 차이가 작으면 steady
+ */
+function summarizeTrend(points) {
+  const sum = (arr) => arr.reduce((a, p) => a + p.ratio, 0);
+  const recent = sum(points.slice(-3));
+  const yearAgo = sum(points.slice(-15, -12));
+  const change = yearAgo > 0 ? Math.round(((recent - yearAgo) / yearAgo) * 100) : null;
+  const byMonth = Array.from({ length: 12 }, () => []);
+  for (const p of points) byMonth[Number(p.period.slice(5, 7)) - 1].push(p.ratio);
+  const avg = byMonth.map((v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0));
+  const maxAvg = Math.max(...avg);
+  const meanAvg = avg.reduce((a, b) => a + b, 0) / 12;
+  const steady = !maxAvg || maxAvg < meanAvg * 1.3;
+  const peakMonths = steady ? [] : avg.map((v, i) => (v >= maxAvg * 0.85 ? i + 1 : 0)).filter(Boolean);
+  return { change, peakMonths, steady, empty: !points.some((p) => p.ratio > 0) };
+}
+
+async function getTrend(query, entry, sample) {
+  if (sample) {
+    const points = sampleTrend(query);
+    return { points, ...summarizeTrend(points) };
+  }
+  if (entry.trend?.points && Date.now() - new Date(entry.trend.fetchedAt).getTime() < TREND_TTL_MS) {
+    return { points: entry.trend.points, ...summarizeTrend(entry.trend.points) };
+  }
+  try {
+    const points = await fetchTrend(query);
+    entry.trend = { points, fetchedAt: new Date().toISOString() };
+    return { points, ...summarizeTrend(points) };
+  } catch (err) {
+    if (err instanceof DatalabOffError) return { datalabOff: true };
+    console.error("검색 흐름 실패:", err.message);
+    return { error: err.message };
+  }
+}
+
 function percentile(sorted, p) {
   if (!sorted.length) return 0;
   const i = (sorted.length - 1) * p;
@@ -222,7 +323,10 @@ async function search(query, { ourNames = [], sample = false, force = false } = 
   if (sample) {
     entry = { ...sampleItems(q), fetchedAt: new Date().toISOString() };
   } else if (force || !entry || Date.now() - new Date(entry.fetchedAt).getTime() > CACHE_TTL_MS) {
-    entry = { ...(await fetchItems(q)), fetchedAt: new Date().toISOString() };
+    entry = { ...(await fetchItems(q)), fetchedAt: new Date().toISOString(), trend: force ? undefined : entry?.trend };
+  }
+  const trend = await getTrend(q, entry, sample);
+  if (!sample) {
     cache[cacheKey] = entry;
     writeCache(cache);
   }
@@ -233,7 +337,7 @@ async function search(query, { ourNames = [], sample = false, force = false } = 
   if (!sample && analysis.storeMall && !data.storeMall) data.storeMall = analysis.storeMall;
   writeAll(data);
 
-  return { query: q, total: entry.total, fetchedAt: entry.fetchedAt, items: entry.items, ...analysis };
+  return { query: q, total: entry.total, fetchedAt: entry.fetchedAt, items: entry.items, trend, ...analysis };
 }
 
 // 위안 환율 (1위안 = ?원). 하루 두 번 정도 자동으로 받고, 못 받으면 지난 값 → 기본값
@@ -380,5 +484,5 @@ function resetStoreMall() {
 module.exports = {
   search, verifyKeys, getState, addCandidate, updateCandidate, deleteCandidate, setFeePercent, setExtraPercent, resetStoreMall,
   sourcingUrl, fetchProductImage, keysSet, SearchKeyError,
-  _test: { analyze, tokens, normalize },
+  _test: { analyze, tokens, normalize, summarizeTrend, sampleTrend },
 };
