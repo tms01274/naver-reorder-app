@@ -35,6 +35,7 @@
         <button id="openVendorManager" class="btn-ghost">
           업체 관리 <span id="vendorCountBadge" class="nav-count" title="업체가 연결되지 않은 품목 수" hidden></span>
         </button>
+        <button id="openMarket" class="btn-ghost">시장 조사</button>
         <button id="openMailTemplate" class="btn-ghost">메일 양식</button>
         <button id="openSettings" class="btn-ghost">판단 기준</button>
       </nav>
@@ -285,6 +286,14 @@
     <div class="modal modal-wide">
       <button class="btn-close" data-close="setupOverlay" aria-label="닫기">×</button>
       <div id="setupBody"></div>
+    </div>
+  </div>
+
+  <!-- 시장 조사: 네이버 쇼핑 검색으로 경쟁 상품 · 가격대 · 신제품 후보 -->
+  <div id="marketOverlay" class="overlay" hidden>
+    <div class="modal modal-xwide modal-fixed">
+      <button class="btn-close" data-close="marketOverlay" aria-label="닫기">×</button>
+      <div id="marketBody"></div>
     </div>
   </div>
 

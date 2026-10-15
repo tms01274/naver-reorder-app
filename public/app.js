@@ -2418,6 +2418,344 @@ async function renderMovePane() {
   });
 }
 
+// ── 시장 조사 ───────────────────────────────────────
+// 네이버 쇼핑 검색으로 경쟁 상품 · 가격대를 보고, 우리 스토어에 없는 품목 단어로 신제품을 찾는다.
+// 마음에 드는 상품은 '후보'로 담아 원가를 넣으면 마진율을 계산한다.
+
+const MARKET_SUGGESTIONS = ["글라스아트 재료", "썬캐쳐 만들기", "스테인드글라스 필름", "마크라메 부자재", "풍경 종 만들기", "모빌 만들기 재료"];
+const marketState = {
+  tab: "search", query: "", result: null, loading: false, error: "", word: "", hideOurs: true, sort: "sim",
+  keysSet: false, sample: false, keywords: [], storeMall: "", feePercent: 6, extraPercent: 40, cnyRate: null, candidates: [],
+};
+
+function won(n) {
+  return `${Math.round(Number(n) || 0).toLocaleString("ko-KR")}원`;
+}
+
+async function openMarket() {
+  resetPaneScroll("marketBody");
+  openModal("marketOverlay");
+  try {
+    Object.assign(marketState, await fetchJson("/api/market"));
+  } catch (err) {
+    marketState.error = err.message;
+  }
+  renderMarket();
+  $("marketQuery")?.focus();
+}
+
+async function runMarketSearch(query, fresh) {
+  const q = String(query ?? marketState.query).trim();
+  if (!q) return toast("찾을 단어를 넣어주세요.", "error");
+  Object.assign(marketState, { query: q, loading: true, error: "", word: "", tab: "search" });
+  renderMarket();
+  try {
+    const result = await fetchJson(`/api/market/search?q=${encodeURIComponent(q)}${fresh ? "&fresh=1" : ""}`);
+    marketState.result = result;
+    marketState.keywords = [result.query, ...marketState.keywords.filter((k) => k !== result.query)].slice(0, 12);
+    if (result.storeMall) marketState.storeMall = result.storeMall;
+  } catch (err) {
+    marketState.result = null;
+    marketState.error = err.message;
+    if (/검색 키/.test(err.message)) marketState.keysSet = false;
+  }
+  marketState.loading = false;
+  resetPaneScroll("marketBody");
+  renderMarket();
+}
+
+// 네이버 쇼핑 검색 키 넣기. 매장에서 직접 받을 수 있게 순서를 쉽게 안내한다 (무료, 네이버 아이디로 로그인)
+function marketKeysHtml() {
+  const changing = marketState.keysSet;
+  return `
+    <div class="market-keys">
+      <strong>${changing ? "검색 키 바꾸기" : "처음 한 번만, 네이버 쇼핑 검색 키를 넣어주세요"}</strong>
+      <p class="muted">네이버에서 무료로 받는 열쇠예요. 관리자에게 받은 키가 있으면 바로 아래에 붙여넣으면 돼요.</p>
+      <div class="market-keys-form">
+        <input id="marketKeyId" class="input" type="text" placeholder="Client ID" autocomplete="off" />
+        <input id="marketKeySecret" class="input" type="text" placeholder="Client Secret" autocomplete="off" />
+        <button type="button" id="marketKeySave" class="btn-primary">확인하고 저장</button>
+        ${changing ? `<button type="button" id="marketKeyCancel" class="btn-ghost">취소</button>` : ""}
+      </div>
+      <details class="market-keys-howto" ${changing ? "" : "open"}>
+        <summary>직접 받는 방법 (5분)</summary>
+        <ol>
+          <li><a href="https://developers.naver.com/apps/#/register" target="_blank" rel="noopener"><b>여기를 눌러</b> 네이버 개발자센터</a>를 열고, 스토어에 쓰는 네이버 아이디로 로그인해요. 처음이면 약관 동의와 휴대폰 인증이 나올 수 있어요.</li>
+          <li><b>애플리케이션 이름</b>: <code>아틀리에말리</code> 처럼 아무 이름이나 적어요.</li>
+          <li><b>사용 API</b>: 목록에서 <b>검색</b>을 골라요.</li>
+          <li><b>비로그인 오픈 API 서비스 환경</b>: <b>WEB 설정</b>을 고르고, 웹 서비스 URL 에 <code>http://localhost:3000</code> 을 적어요.</li>
+          <li>맨 아래 <b>등록하기</b>를 누르면 <b>Client ID</b> 와 <b>Client Secret</b> 이 보여요. 각각 복사해서 위 칸에 붙여넣고 '확인하고 저장'을 눌러요.</li>
+        </ol>
+        <p class="muted">스마트스토어 판매에 쓰는 키(커머스API)와는 다른 키예요. 검색은 하루 2만 번 넘게 할 수 있어서 넉넉해요.</p>
+      </details>
+    </div>`;
+}
+
+function marketItemHtml(it, ours, inCand) {
+  const cat = it.category.slice(-2).join(" › ");
+  return `
+    <div class="market-item ${ours ? "ours" : ""}">
+      ${it.image ? `<img src="${escapeHtml(it.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : `<div class="market-noimg"></div>`}
+      <div class="market-item-main">
+        <a href="${escapeHtml(it.link)}" target="_blank" rel="noopener" class="market-title">${escapeHtml(it.title)}</a>
+        <div class="market-meta">
+          ${ours ? `<span class="direct-badge">우리 스토어</span>` : it.multiSeller ? `<span class="direct-badge" title="여러 판매처를 묶은 가격비교 상품이에요. 표시된 가격은 그중 가장 싼 값">가격비교</span>` : `<span>${escapeHtml(it.mallName)}</span>`}
+          ${cat ? `<span class="muted">${escapeHtml(cat)}</span>` : ""}
+        </div>
+      </div>
+      <div class="market-price">${won(it.price)}</div>
+      ${ours ? "<span></span>" : `<button type="button" class="btn-outline btn-sm" data-cand-add="${escapeHtml(it.id)}" ${inCand ? "disabled" : ""}>${inCand ? "담았어요" : "후보 담기"}</button>`}
+    </div>`;
+}
+
+function marketResultHtml() {
+  const s = marketState;
+  const r = s.result;
+  if (s.loading) return `<div class="empty-note"><strong>'${escapeHtml(s.query)}' 찾는 중이에요</strong>네이버 쇼핑에서 상품 300개까지 모으고 있어요</div>`;
+  if (s.error) return `<div class="empty-note"><strong>찾지 못했어요</strong>${escapeHtml(s.error)}</div>`;
+  if (!r) return `<div class="empty-note"><strong>어떤 상품을 찾아볼까요?</strong>단어를 넣으면 네이버 쇼핑의 경쟁 상품과 가격대, 우리 스토어에 없는 품목을 보여드려요</div>`;
+
+  const ours = (it) => !!r.storeMall && it.mallName === r.storeMall;
+  const candTitles = new Set(s.candidates.map((c) => c.title));
+  let items = r.items.filter((it) => !(s.hideOurs && ours(it)));
+  if (s.word) items = items.filter((it) => it.title.toLowerCase().includes(s.word));
+  if (s.sort === "low") items = [...items].sort((a, b) => a.price - b.price);
+  if (s.sort === "high") items = [...items].sort((a, b) => b.price - a.price);
+  const ps = r.priceStats;
+
+  const wordChip = (w, cls) => `<button type="button" class="word-chip ${cls} ${s.word === w.word ? "active" : ""}" data-word="${escapeHtml(w.word)}" title="${w.malls}곳 판매처 · 상품 ${w.items}개">${escapeHtml(w.word)} <span>${w.malls}곳</span></button>`;
+
+  return `
+    <div class="detail-stats market-stats">
+      <div class="stat-box"><div class="label">네이버 쇼핑 상품</div><div class="value">${r.total.toLocaleString("ko-KR")}개</div></div>
+      <div class="stat-box highlight"><div class="label">가격 중간값</div><div class="value">${ps ? won(ps.median) : "-"}</div></div>
+      <div class="stat-box"><div class="label">흔한 가격대</div><div class="value">${ps ? `${won(ps.p25)} ~ ${won(ps.p75)}` : "-"}</div></div>
+      <div class="stat-box"><div class="label">우리 스토어 상품</div><div class="value" title="${escapeHtml(r.storeMall || "아직 우리 스토어를 못 찾았어요")}">${r.storeMall ? `${r.ourCount}개` : "-"}</div></div>
+    </div>
+    <p class="market-note muted">${new Date(r.fetchedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" })} 기준 · 관련도 높은 ${r.items.length}개로 계산 <button type="button" class="btn-ghost btn-sm" id="marketRefresh">다시 찾기</button></p>
+
+    <h4>우리 스토어에 없는 품목 단어 <span class="muted market-h-sub">여러 판매처가 파는데 우리 상품 이름에는 없는 말이에요. 누르면 그 상품만 보여요</span></h4>
+    <div class="word-chips">${r.missingWords.map((w) => wordChip(w, "missing")).join("") || `<span class="muted">눈에 띄는 단어가 없어요</span>`}</div>
+    ${r.sharedWords.length ? `
+    <h4>우리도 파는 품목 단어</h4>
+    <div class="word-chips">${r.sharedWords.map((w) => wordChip(w, "shared")).join("")}</div>` : ""}
+    ${r.topMalls.length ? `<p class="market-malls muted">상품이 많은 판매처: ${r.topMalls.map((m) => `${escapeHtml(m.name)} ${m.count}`).join(" · ")}</p>` : ""}
+
+    <div class="market-list-head">
+      <strong>상품 ${items.length}개</strong>
+      ${s.word ? `<button type="button" class="word-chip active" data-word="${escapeHtml(s.word)}">${escapeHtml(s.word)} ×</button>` : ""}
+      <label class="market-check"><input type="checkbox" id="marketHideOurs" ${s.hideOurs ? "checked" : ""} /> 우리 스토어 빼기</label>
+      <select id="marketSort" class="input market-sort" aria-label="정렬">
+        <option value="sim" ${s.sort === "sim" ? "selected" : ""}>관련도 순</option>
+        <option value="low" ${s.sort === "low" ? "selected" : ""}>낮은 가격 순</option>
+        <option value="high" ${s.sort === "high" ? "selected" : ""}>높은 가격 순</option>
+      </select>
+    </div>
+    <div class="market-items">${items.map((it) => marketItemHtml(it, ours(it), candTitles.has(it.title))).join("") || `<div class="empty-note">해당하는 상품이 없어요</div>`}</div>`;
+}
+
+// 들여오는 원가: 1688 가격(위안)을 넣었으면 위안 × 환율 × (1 + 추가 비용 %), 아니면 직접 넣은 원가
+function candidateCost(c) {
+  const s = marketState;
+  if (c.cny !== null && c.cny !== undefined) return Math.round(c.cny * (s.cnyRate?.value || 200) * (1 + (s.extraPercent ?? 40) / 100));
+  return c.cost ?? null;
+}
+
+function candidateMargin(c, feePercent) {
+  const cost = candidateCost(c);
+  if (cost === null || !c.salePrice) return null;
+  const amount = c.salePrice - cost - (c.salePrice * feePercent) / 100;
+  return { amount, rate: (amount / c.salePrice) * 100 };
+}
+
+function candidateMarginHtml(c) {
+  const m = candidateMargin(c, marketState.feePercent);
+  if (!m) return `<span class="muted">가격을 넣으면 계산해요</span>`;
+  const cls = m.rate >= 40 ? "good" : m.rate >= 20 ? "" : "bad";
+  return `<span class="margin ${cls}">${won(m.amount)} · ${m.rate.toFixed(0)}%</span>`;
+}
+
+function candidateCostHtml(c) {
+  return c.cny !== null && c.cny !== undefined
+    ? `<span class="cand-auto">${won(candidateCost(c))}</span>`
+    : `<input class="input" data-cand-field="cost" type="text" inputmode="numeric" placeholder="국내 매입이면 직접" value="${c.cost ?? ""}" />`;
+}
+
+function marketCandidatesHtml() {
+  const s = marketState;
+  if (!s.candidates.length) return `<div class="empty-note"><strong>담은 후보가 없어요</strong>'찾아보기'에서 마음에 드는 상품의 '후보 담기'를 눌러보세요</div>`;
+  const rate = s.cnyRate?.value || 200;
+  return `
+    <div class="market-fee">
+      <label>스마트스토어 수수료 <span class="input-suffix"><input id="marketFee" class="input" type="number" min="0" max="50" step="0.1" value="${s.feePercent}" /><span>%</span></span></label>
+      <label title="중국 내 배송 · 국제 배송 · 관세 · 부가세 · 깨짐 손실을 물건값에 더하는 비율이에요. 실제로 들어온 비용을 보고 맞춰주세요">중국 추가 비용 <span class="input-suffix"><input id="marketExtra" class="input" type="number" min="0" max="300" step="1" value="${s.extraPercent}" /><span>%</span></span></label>
+      <span class="muted">환율 1위안 = ${rate.toLocaleString("ko-KR")}원${s.cnyRate?.at ? " (자동)" : ""}</span>
+    </div>
+    <div class="cand-list">
+      ${s.candidates.map((c) => `
+        <div class="cand-row" data-cand-id="${escapeHtml(c.id)}">
+          ${c.image ? `<img src="${escapeHtml(c.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : `<div class="market-noimg"></div>`}
+          <div class="cand-main">
+            <a href="${escapeHtml(c.link)}" target="_blank" rel="noopener" class="market-title">${escapeHtml(c.title)}</a>
+            <div class="market-meta"><span>${escapeHtml(c.mallName)}</span><span class="muted">시장 가격 ${won(c.marketPrice)}</span>${c.query ? `<span class="muted">'${escapeHtml(c.query)}'에서 담음</span>` : ""}</div>
+            <div class="cand-source">
+              <span class="cand-label">거래처 찾기</span>
+              <input class="input cand-zh" data-cand-field="zhQuery" type="text" placeholder="중국어 검색어" value="${escapeHtml(c.zhQuery || "")}" />
+              <a class="btn-ghost btn-sm" href="https://papago.naver.com/?sk=ko&tk=zh-CN&st=${encodeURIComponent(c.query || c.title)}" target="_blank" rel="noopener" title="파파고로 중국어 검색어 만들기">파파고</a>
+              <button type="button" class="btn-outline btn-sm" data-go="1688">1688</button>
+              ${c.image ? `<button type="button" class="btn-outline btn-sm" data-photo title="상품 사진을 저장하고 1688 을 열어요. 검색창의 카메라 버튼으로 올리면 같은 물건을 찾아줘요">1688 사진으로</button>` : ""}
+              <button type="button" class="btn-outline btn-sm" data-go="taobao">타오바오</button>
+              <button type="button" class="btn-outline btn-sm" data-go="domeggook" title="국내 도매 (한글로 찾아요)">도매꾹</button>
+            </div>
+            <div class="cand-fields">
+              <label>1688 가격 (위안) <input class="input" data-cand-field="cny" type="text" inputmode="decimal" placeholder="예: 3.5" value="${c.cny ?? ""}" /></label>
+              <label>들여오는 원가 ${candidateCostHtml(c)}</label>
+              <label>우리 판매가 <input class="input" data-cand-field="salePrice" type="text" inputmode="numeric" value="${c.salePrice ?? ""}" /></label>
+              <div class="cand-margin"><span class="muted">예상 마진 (개당)</span>${candidateMarginHtml(c)}</div>
+            </div>
+            <input class="input cand-memo" data-cand-field="memo" type="text" placeholder="메모 (예: ○○가게 재구매율 높음, 샘플 주문함, 10개 이상 단가 3위안)" value="${escapeHtml(c.memo || "")}" />
+          </div>
+          <button type="button" class="btn-danger-ghost btn-sm" data-cand-del>삭제</button>
+        </div>`).join("")}
+    </div>`;
+}
+
+function renderMarket() {
+  const s = marketState;
+  const top = paneScrollBefore("marketBody", s.tab);
+  const keywords = s.keywords.length ? s.keywords : MARKET_SUGGESTIONS;
+  const needKeys = (!s.keysSet || s.changingKeys) && !s.sample;
+  $("marketBody").innerHTML = `
+    <h3>시장 조사 ${s.sample ? `<span class="mock-badge">샘플 데이터</span>` : ""}</h3>
+    <p class="modal-desc">네이버 쇼핑에서 경쟁 상품과 가격대를 보고, 우리 스토어에 없는 품목으로 신제품을 찾아요. 마음에 드는 상품은 후보로 담아 원가를 넣으면 마진을 계산해 드려요.</p>
+    <div class="tabs manager-tabs" role="tablist">
+      <button type="button" class="tab ${s.tab === "search" ? "active" : ""}" data-market-tab="search">찾아보기</button>
+      <button type="button" class="tab ${s.tab === "cand" ? "active" : ""}" data-market-tab="cand">후보 <span class="tab-count">${s.candidates.length}</span></button>
+    </div>
+    <div class="manager-pane" data-view="${s.tab}">
+      ${s.tab === "cand" ? marketCandidatesHtml() : needKeys ? marketKeysHtml() : `
+        <form class="market-search" id="marketForm">
+          <input id="marketQuery" class="input" type="search" placeholder="찾을 상품 (예: 썬캐쳐 만들기)" value="${escapeHtml(s.query)}" />
+          <button type="submit" class="btn-primary" ${s.loading ? "disabled" : ""}>찾기</button>
+        </form>
+        <div class="word-chips keyword-chips">
+          <span class="muted">${s.keywords.length ? "최근" : "예시"}</span>
+          ${keywords.map((k) => `<button type="button" class="word-chip" data-keyword="${escapeHtml(k)}">${escapeHtml(k)}</button>`).join("")}
+        </div>
+        ${marketResultHtml()}
+        ${s.sample ? "" : `<p class="market-key-link"><button type="button" class="btn-ghost btn-sm" id="marketKeyChange">검색 키 바꾸기</button></p>`}`}
+    </div>`;
+  paneScrollAfter("marketBody", top);
+  bindMarket();
+}
+
+function bindMarket() {
+  const body = $("marketBody");
+  body.querySelectorAll("[data-market-tab]").forEach((b) => b.addEventListener("click", () => {
+    marketState.tab = b.dataset.marketTab;
+    renderMarket();
+  }));
+  $("marketForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    runMarketSearch($("marketQuery").value);
+  });
+  body.querySelectorAll("[data-keyword]").forEach((b) => b.addEventListener("click", () => runMarketSearch(b.dataset.keyword)));
+  $("marketRefresh")?.addEventListener("click", () => runMarketSearch(marketState.query, true));
+  body.querySelectorAll("[data-word]").forEach((b) => b.addEventListener("click", () => {
+    marketState.word = marketState.word === b.dataset.word ? "" : b.dataset.word;
+    renderMarket();
+  }));
+  $("marketHideOurs")?.addEventListener("change", (e) => { marketState.hideOurs = e.target.checked; renderMarket(); });
+  $("marketSort")?.addEventListener("change", (e) => { marketState.sort = e.target.value; renderMarket(); });
+
+  $("marketKeySave")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "확인 중…";
+    try {
+      await postJson("/api/market/keys", "POST", { clientId: $("marketKeyId").value, clientSecret: $("marketKeySecret").value });
+      Object.assign(marketState, { keysSet: true, changingKeys: false, error: "" });
+      toast("키가 맞아요. 이제 찾아볼 수 있어요");
+      renderMarket();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "확인하고 저장";
+      toast(err.message, "error");
+    }
+  });
+  $("marketKeyChange")?.addEventListener("click", () => { marketState.changingKeys = true; renderMarket(); });
+  $("marketKeyCancel")?.addEventListener("click", () => { marketState.changingKeys = false; renderMarket(); });
+
+  body.querySelectorAll("[data-cand-add]").forEach((b) => b.addEventListener("click", async () => {
+    const item = marketState.result?.items.find((it) => it.id === b.dataset.candAdd);
+    if (!item) return;
+    try {
+      const cand = await postJson("/api/market/candidates", "POST", { item, query: marketState.result.query });
+      marketState.candidates = [cand, ...marketState.candidates.filter((c) => c.id !== cand.id)];
+      toast("후보에 담았어요. '후보' 탭에서 원가를 넣어보세요");
+      renderMarket();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }));
+
+  for (const [inputId, key] of [["marketFee", "feePercent"], ["marketExtra", "extraPercent"]]) {
+    $(inputId)?.addEventListener("change", async (e) => {
+      try {
+        Object.assign(marketState, await postJson("/api/market/settings", "POST", { [key]: e.target.value }));
+        renderMarket();
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+  }
+  body.querySelectorAll(".cand-row").forEach((row) => {
+    const id = row.dataset.candId;
+    const cand = () => marketState.candidates.find((c) => c.id === id);
+    row.querySelectorAll("[data-cand-field]").forEach((input) => input.addEventListener("change", async () => {
+      try {
+        const field = input.dataset.candField;
+        const updated = await postJson(`/api/market/candidates/${encodeURIComponent(id)}`, "PUT", { [field]: input.value });
+        marketState.candidates = marketState.candidates.map((c) => (c.id === id ? updated : c));
+        // 위안 가격을 넣거나 지우면 원가 칸 모양이 바뀌어서 다시 그린다
+        if (field === "cny") renderMarket();
+        else row.querySelector(".cand-margin").innerHTML = `<span class="muted">예상 마진 (개당)</span>${candidateMarginHtml(updated)}`;
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    }));
+    // 1688 · 타오바오는 중국어로 찾아야 잘 나와서, 중국어 검색어가 없으면 먼저 넣게 한다
+    row.querySelectorAll("[data-go]").forEach((btn) => btn.addEventListener("click", () => {
+      const c = cand();
+      const site = btn.dataset.go;
+      const q = site === "domeggook" ? c.query || c.title : c.zhQuery;
+      if (!q) {
+        row.querySelector(".cand-zh").focus();
+        return toast("중국어 검색어를 먼저 넣어주세요. '파파고'를 누르면 바꿔줘요", "error");
+      }
+      window.open(`/api/market/go/${site}?q=${encodeURIComponent(q)}`, "_blank", "noopener");
+    }));
+    row.querySelector("[data-photo]")?.addEventListener("click", () => {
+      const a = document.createElement("a");
+      a.href = `/api/market/image?url=${encodeURIComponent(cand().image)}`;
+      a.download = "1688-search.jpg";
+      a.click();
+      window.open("https://s.1688.com/", "_blank", "noopener");
+      toast("사진을 저장했어요. 1688 검색창의 카메라 버튼을 눌러 저장한 사진을 올려보세요");
+    });
+    const del = row.querySelector("[data-cand-del]");
+    del.addEventListener("click", () => confirmClick(del, "한 번 더 누르면 삭제", async () => {
+      try {
+        await fetchJson(`/api/market/candidates/${encodeURIComponent(id)}`, { method: "DELETE" });
+        marketState.candidates = marketState.candidates.filter((c) => c.id !== id);
+        renderMarket();
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    }));
+  });
+}
+
 // ── 이벤트 연결 ─────────────────────────────────────
 
 $("openGuide").addEventListener("click", openGuide);
@@ -2436,6 +2774,7 @@ $("mtLangTabs").addEventListener("click", (e) => {
   if (btn) showTemplateLang(btn.dataset.templateLang);
 });
 $("openSettings").addEventListener("click", openSettings);
+$("openMarket").addEventListener("click", openMarket);
 $("applySettings").addEventListener("click", applySettings);
 $("saveTemplate").addEventListener("click", saveTemplate);
 $("refreshBtn").addEventListener("click", () => loadProducts({ fresh: 1 }));

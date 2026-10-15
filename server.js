@@ -21,6 +21,7 @@ const { getAllLabels, createLabel, updateLabel, deleteLabel } = require("./src/i
 const { readSettings, saveSettings } = require("./src/settings");
 const { CHANGELOG } = require("./src/changelog");
 const { readUiState, saveUiState } = require("./src/uiState");
+const market = require("./src/marketResearch");
 
 // 새 PC 설정 화면에서 API 키를 넣으면 서버를 다시 켜지 않고 실제 데이터 모드로 바꾼다 (useNaverMode)
 let MOCK_MODE;
@@ -689,6 +690,92 @@ app.post("/api/setup/naver-keys", async (req, res) => {
   } catch (err) {
     console.error("네이버 연결 확인 실패:", err.message.split("\n")[0]);
     res.json({ ok: false, message: naverFailureMessage(err), ip: await setup.publicIp() });
+  }
+});
+
+// ── 시장 조사 (네이버 쇼핑 검색) ─────────────────────
+app.get("/api/market", async (req, res) => {
+  res.json({ ...(await market.getState()), sample: MOCK_MODE });
+});
+
+// 거래처 찾기: 1688 · 타오바오 · 도매꾹 검색 화면으로 보낸다
+app.get("/api/market/go/:site", (req, res) => {
+  const url = market.sourcingUrl(req.params.site, req.query.q);
+  if (!url) return res.status(400).send("찾을 단어가 없어요.");
+  res.redirect(url);
+});
+
+// 1688 사진 검색에 올릴 상품 사진 저장
+app.get("/api/market/image", async (req, res) => {
+  try {
+    const img = await market.fetchProductImage(req.query.url);
+    if (!img) return res.status(400).send("사진을 받을 수 없어요.");
+    const ext = img.type.includes("png") ? "png" : img.type.includes("webp") ? "webp" : "jpg";
+    res.set("Content-Type", img.type);
+    res.set("Content-Disposition", `attachment; filename="1688-search.${ext}"`);
+    res.send(img.buffer);
+  } catch {
+    res.status(400).send("사진을 받을 수 없어요.");
+  }
+});
+
+app.get("/api/market/search", async (req, res) => {
+  // 우리 상품 이름 (경쟁 상품과 비교용). 네이버를 못 불러와도 검색은 되게
+  let ourNames = [];
+  try {
+    const products = await getCachedProducts(false);
+    ourNames = [...new Set(products.flatMap((p) => [p.name, String(p.name).replace(/\s*\([^)]*\)\s*$/, "")]))];
+  } catch {}
+  try {
+    res.json(await market.search(req.query.q, { ourNames, sample: MOCK_MODE, force: !!req.query.fresh }));
+  } catch (err) {
+    if (err instanceof market.SearchKeyError) return res.status(400).json({ error: err.message, needKeys: true });
+    console.error("시장 조사 검색 실패:", err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/market/keys", async (req, res) => {
+  try {
+    const id = String(req.body?.clientId || "").trim();
+    const secret = String(req.body?.clientSecret || "").trim();
+    if (id && secret) await market.verifyKeys(id, secret); // 틀린 키는 저장하지 않는다
+    setup.saveSearchKeys(id, secret);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/market/candidates", (req, res) => {
+  try {
+    res.json(market.addCandidate(req.body?.item, req.body?.query));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/market/candidates/:id", (req, res) => {
+  try {
+    res.json(market.updateCandidate(req.params.id, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/market/candidates/:id", (req, res) => {
+  market.deleteCandidate(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post("/api/market/settings", async (req, res) => {
+  try {
+    if ("feePercent" in (req.body || {})) market.setFeePercent(req.body.feePercent);
+    if ("extraPercent" in (req.body || {})) market.setExtraPercent(req.body.extraPercent);
+    if (req.body?.resetStoreMall) market.resetStoreMall();
+    res.json(await market.getState());
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 

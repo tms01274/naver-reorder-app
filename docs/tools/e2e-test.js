@@ -878,6 +878,47 @@ SUITES.template = {
 // 구글 드라이브 폴더 흉내 (setup 묶음). 서버를 띄우기 전(seed)에 만들어 환경변수로 넘긴다
 let driveDir = null;
 
+SUITES.market = {
+  title: "시장 조사 (경쟁 상품 · 없는 품목 단어 · 후보 · 거래처 찾기 · 마진)",
+  async run({ p, server }) {
+    const { hidden, closeAutoPopup } = helpers(p);
+    await closeAutoPopup();
+    await p.click("#openMarket"); await wait(900);
+    check("상단 '시장 조사' → 창 열림 (샘플 모드)", !(await hidden("marketOverlay")) && (await p.$eval("#marketBody", (e) => e.textContent)).includes("샘플 데이터"));
+    await p.click("[data-keyword]"); await wait(900);
+    check("검색 → 가격 중간값 · 상품 목록", (await p.$eval("#marketBody", (e) => e.textContent)).includes("가격 중간값") && (await p.$$(".market-item")).length > 10);
+    const missing = await p.$$eval(".word-chip.missing", (b) => b.map((x) => x.dataset.word));
+    check("우리 스토어에 없는 품목 단어", missing.length > 0, missing.join(","));
+    await p.click(".word-chip.missing"); await wait(300);
+    const titles = await p.$$eval(".market-item .market-title", (a) => a.map((x) => x.textContent.toLowerCase()));
+    check("단어 누르면 그 상품만", titles.length > 0 && titles.every((t) => t.includes(missing[0])));
+
+    await p.click("[data-cand-add]"); await wait(600);
+    const saved = () => JSON.parse(fs.readFileSync(path.join(server.dir, "data", "market.json"), "utf8"));
+    check("후보 담기 → 저장 + 탭 숫자", Object.keys(saved().candidates).length === 1 && (await p.$eval('[data-market-tab="cand"] .tab-count', (e) => e.textContent)) === "1");
+    await p.click('[data-market-tab="cand"]'); await wait(200);
+    await p.$eval('[data-cand-field="salePrice"]', (e) => { e.value = "10000"; e.dispatchEvent(new Event("change")); }); await wait(400);
+    await p.$eval('[data-cand-field="cny"]', (e) => { e.value = "5"; e.dispatchEvent(new Event("change")); }); await wait(600);
+    const rate = await p.evaluate(() => marketState.cnyRate.value);
+    const expectCost = Math.round(5 * rate * 1.4);
+    check("위안 가격 → 원가 자동 (환율 × 추가 비용 40%)", (await p.$eval(".cand-auto", (e) => e.textContent)).replace(/\D/g, "") === String(expectCost), String(expectCost));
+    const margin = Math.round(10000 - expectCost - 600);
+    check("예상 마진 = 판매가 − 원가 − 수수료 6%", (await p.$eval(".cand-margin .margin", (e) => e.textContent)).includes(margin.toLocaleString("ko-KR")));
+    await p.click('[data-go="1688"]'); await wait(300);
+    check("중국어 검색어 없이 1688 → 안내", (await helpers(p).toasts()).some((t) => t.includes("중국어 검색어")));
+
+    const go = await fetch(`${server.url}/api/market/go/domeggook?q=${encodeURIComponent("구리종")}`, { redirect: "manual" });
+    check("도매꾹은 EUC-KR 검색 주소로", go.status === 302 && go.headers.get("location").includes("sw=%B1%B8%B8%AE%C1%BE"));
+    const go1688 = await fetch(`${server.url}/api/market/go/1688?q=${encodeURIComponent("铜铃铛")}`, { redirect: "manual" });
+    check("1688 검색 주소", go1688.headers.get("location").startsWith("https://s.1688.com/") && go1688.headers.get("location").includes("charset=utf8"));
+    check("사진 저장은 네이버 사진만", (await fetch(`${server.url}/api/market/image?url=${encodeURIComponent("http://127.0.0.1/")}`)).status === 400);
+    const keyStatus = await p.evaluate(() => fetch("/api/market/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then((r) => r.status));
+    check("검색 키를 비우면 저장 안 함", keyStatus === 400);
+    await p.evaluate(() => { Object.assign(marketState, { sample: false, keysSet: false, tab: "search" }); renderMarket(); });
+    check("키 없으면 키 넣는 칸 + 받는 방법", !!(await p.$("#marketKeyId")) && (await p.$eval(".market-keys-howto", (e) => e.open)));
+  },
+};
+
 SUITES.setup = {
   title: "백업 · 새 PC 설정 (구글 드라이브 · 가져오기 · API 키)",
   async seed() {

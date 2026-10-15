@@ -56,22 +56,35 @@ function restoreFromBackup(source, date) {
   return restoreFiles(files, { replaceAll: true });
 }
 
-// .env 에 네이버 API 키를 넣고 실제 데이터 모드로. 지금 서버에도 바로 반영(process.env)
-function saveNaverKeys(clientId, clientSecret) {
+// .env 에 값들을 넣고 지금 서버에도 바로 반영(process.env)
+function saveEnv(values) {
+  let text = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, "utf-8") : fs.existsSync(ENV_EXAMPLE) ? fs.readFileSync(ENV_EXAMPLE, "utf-8") : "";
+  for (const [key, value] of Object.entries(values)) {
+    const re = new RegExp(`^${key}=.*$`, "m");
+    text = re.test(text) ? text.replace(re, () => `${key}=${value}`) : `${text.replace(/\s*$/, "")}\n${key}=${value}\n`;
+    process.env[key] = value;
+  }
+  fs.writeFileSync(ENV_FILE, text, "utf-8");
+}
+
+function cleanKeys(clientId, clientSecret) {
   const id = String(clientId || "").trim();
   const secret = String(clientSecret || "").trim();
   if (!id || !secret) throw new Error("client_id 와 client_secret 을 모두 넣어주세요.");
   if (/[\r\n]/.test(id + secret)) throw new Error("키에 줄바꿈이 들어 있어요. 다시 붙여넣어 주세요.");
-  let text = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, "utf-8") : fs.existsSync(ENV_EXAMPLE) ? fs.readFileSync(ENV_EXAMPLE, "utf-8") : "";
-  const set = (key, value) => {
-    const re = new RegExp(`^${key}=.*$`, "m");
-    text = re.test(text) ? text.replace(re, () => `${key}=${value}`) : `${text.replace(/\s*$/, "")}\n${key}=${value}\n`;
-    process.env[key] = value;
-  };
-  set("NAVER_CLIENT_ID", id);
-  set("NAVER_CLIENT_SECRET", secret);
-  set("MOCK_MODE", "false");
-  fs.writeFileSync(ENV_FILE, text, "utf-8");
+  return [id, secret];
+}
+
+// 네이버 커머스API 키를 넣고 실제 데이터 모드로
+function saveNaverKeys(clientId, clientSecret) {
+  const [id, secret] = cleanKeys(clientId, clientSecret);
+  saveEnv({ NAVER_CLIENT_ID: id, NAVER_CLIENT_SECRET: secret, MOCK_MODE: "false" });
+}
+
+// 시장 조사용 네이버 쇼핑 검색 키 (developers.naver.com, 커머스API 와 다른 키)
+function saveSearchKeys(clientId, clientSecret) {
+  const [id, secret] = cleanKeys(clientId, clientSecret);
+  saveEnv({ NAVER_SEARCH_CLIENT_ID: id, NAVER_SEARCH_CLIENT_SECRET: secret });
 }
 
 // 이 PC 의 인터넷 주소 (네이버 API 는 등록된 주소에서만 호출된다 → 관리자에게 알려줄 때)
@@ -94,4 +107,4 @@ async function setupStatus({ mockMode }) {
   };
 }
 
-module.exports = { setupStatus, restoreFiles, restoreFromBackup, saveNaverKeys, publicIp, hasData, keysSet };
+module.exports = { setupStatus, restoreFiles, restoreFromBackup, saveNaverKeys, saveSearchKeys, publicIp, hasData, keysSet };

@@ -17,7 +17,7 @@ const SETUP_FILE = "새PC-설치하기.bat";
 // 옮길 데이터 (네이버에서 다시 받으면 되는 캐시는 빼고)
 const DATA_FILES = [
   "vendors.json", "suppliers.json", "inboundLabels.json", "orders.json", "order-drafts.json",
-  "settings.json", "mail-template.json", "ui-state.json", "stock-watch.json",
+  "settings.json", "mail-template.json", "ui-state.json", "stock-watch.json", "market.json",
 ];
 
 function today() {
